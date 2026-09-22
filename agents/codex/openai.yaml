@@ -1,0 +1,3 @@
+display_name: QC Check
+short_description: Device-level mobile QC from Codex. Test plan, backend contract, Appium run on the real app, evidence-backed report.
+default_prompt: Use $qc-check for ABC-123

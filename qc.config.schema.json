@@ -1,0 +1,204 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/mohamedma872/qc-check-skill/qc.config.schema.json",
+  "title": "qc-check configuration",
+  "description": "Every project-specific fact the QC skill needs. Lives at the host repository root as qc.config.json.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Identity and output location.",
+      "properties": {
+        "name": { "type": "string", "description": "Human name of the app under test. Used in report headers only." },
+        "reportsDir": { "type": "string", "default": "qc-reports", "description": "Where run state, screenshots, recordings and reports are written, relative to the repo root." },
+        "locales": { "type": "array", "items": { "type": "string" }, "default": ["en"], "description": "Languages each screen is checked in." },
+        "rtlLocales": { "type": "array", "items": { "type": "string" }, "default": [], "description": "Subset of locales that render right-to-left. Empty means no RTL checks." }
+      }
+    },
+
+    "tracker": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Issue tracker integration. kind 'none' skips ticket fetch and the publish phase.",
+      "properties": {
+        "kind": { "enum": ["jira", "github", "none"], "default": "none" },
+        "ticketPattern": { "type": "string", "default": "[A-Z]+-[0-9]+", "description": "Regex used to derive a ticket id from the branch name and to validate arguments." },
+        "site": { "type": "string", "description": "Tracker host, for example your-org.atlassian.net." },
+        "projectKey": { "type": "string", "description": "Project key, for example ABC." },
+        "tools": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Names of the tools the agent should call for each tracker operation. An empty string means the capability is unavailable and the related step is skipped.",
+          "properties": {
+            "getIssue": { "type": "string" },
+            "addComment": { "type": "string" },
+            "addLabels": { "type": "string" },
+            "uploadAttachment": { "type": "string" }
+          }
+        },
+        "passLabel": { "type": "string", "default": "QC-Agent-Pass", "description": "Label applied only to a clean PASS run." },
+        "blockedLabel": { "type": "string", "default": "BE-Blocking", "description": "Label applied when the blocker is outside the app." }
+      }
+    },
+
+    "repo": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Version control facts the run needs.",
+      "properties": {
+        "defaultBranch": { "type": "string", "default": "main", "description": "Branch a feature branch is diffed against to find the code under test, and the base for a pull request opened by the fix loop." },
+        "prCommand": { "type": "string", "description": "Command that opens a pull request, for example \"gh pr create --fill\". Empty means derive from the git remote and print the URL instead of opening one." }
+      }
+    },
+
+    "app": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Build identity per flavor.",
+      "properties": {
+        "defaultFlavor": { "type": "string", "default": "staging" },
+        "androidActivity": { "type": "string", "description": "Fully qualified launcher activity." },
+        "envBanner": { "type": "string", "description": "Text the app shows to mark a non-production build, asserted on the first screen to prove the right flavor is installed. Empty means verify the environment another way." },
+        "build": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Commands that build and install the configured flavor on a connected device. Empty means the agent asks before building.",
+          "properties": {
+            "android": { "type": "string" },
+            "ios": { "type": "string" }
+          }
+        },
+        "flavors": {
+          "type": "object",
+          "description": "Map of flavor name to package identifiers.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "androidPackage": { "type": "string" },
+              "iosBundleId": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+
+    "devices": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Form factors the skill may drive. A disabled profile is reported as skipped, never as a pass.",
+      "properties": {
+        "android": { "$ref": "#/definitions/androidProfile" },
+        "android_tablet": { "$ref": "#/definitions/androidProfile" },
+        "ios": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "deviceName": { "type": "string" },
+            "udid": { "type": "string", "description": "Simulator udid. Leave empty to let Appium pick by deviceName." },
+            "caps": { "$ref": "#/definitions/capsOverride" }
+          }
+        },
+        "appium": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "host": { "type": "string", "default": "127.0.0.1" },
+            "port": { "type": "integer", "default": 4723 },
+            "newCommandTimeout": { "type": "integer", "default": 900, "description": "Seconds. QC interleaves device commands with code reading, so a short timeout kills sessions mid-pass." }
+          }
+        }
+      }
+    },
+
+    "backend": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "REST contract and smoke checks. Set enabled false for an app with no backend of its own.",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "defaultEnv": { "type": "string", "default": "staging" },
+        "baseUrls": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Map of environment name to base URL." },
+        "healthPath": { "type": "string", "description": "Unauthenticated path used to decide whether the gateway is up." },
+        "auth": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "path": { "type": "string" },
+            "method": { "type": "string", "default": "POST" },
+            "usernameField": { "type": "string", "description": "Body field that receives credentials.username." },
+            "passwordField": { "type": "string", "description": "Body field that receives credentials.password." },
+            "tokenPath": { "type": "string", "description": "Dot-path to the bearer token in the login response, for example data.accessToken. Prefix with headers. to read a response header instead." },
+            "extraBody": { "type": "object", "description": "Constant fields merged into the login body." },
+            "sessionHeaders": {
+              "type": "object",
+              "additionalProperties": { "type": "string" },
+              "description": "Request header name to dot-path in the login response, for a gateway that issues a per-session fingerprint or CSRF value at login. Same path syntax as tokenPath."
+            }
+          }
+        },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Constant headers sent with every request." },
+        "smokePath": { "type": "string", "description": "Cheap authenticated GET used to prove a real round trip." }
+      }
+    },
+
+    "codeMap": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Where things live in the host repo, so the skill can read the code under test instead of guessing.",
+      "properties": {
+        "sourceDir": { "type": "string", "default": "src", "description": "Application source root. Searches for a component or a test identifier start here." },
+        "navigationGlob": { "type": "string", "description": "Used to build the screen inventory in full-sweep mode." },
+        "translationsDir": { "type": "string" },
+        "apiServicesGlob": { "type": "string" },
+        "mutationsGlob": { "type": "string" },
+        "queriesGlob": { "type": "string", "description": "Read-side data hooks, used by the unit-test phase." },
+        "utilsGlob": { "type": "string", "description": "Helpers and pure functions, the cheapest things to unit test." },
+        "validationGlob": { "type": "string", "description": "Form and input validation rules." },
+        "testCommand": { "type": "string" },
+        "lintCommand": { "type": "string" },
+        "typecheckCommand": { "type": "string" },
+        "testsGitignored": { "type": "boolean", "default": false, "description": "True when the test folder is gitignored, so committing tests needs an explicit force add." }
+      }
+    },
+
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "currency": { "type": "string", "default": "USD" },
+        "runCap": { "type": "number", "default": 30, "description": "Soft cap for one run. Past it the run prefers finishing the report over more test cases." }
+      }
+    },
+
+    "credentialsFile": {
+      "type": "string",
+      "default": "qc.credentials.js",
+      "description": "Path, relative to the repo root, of the gitignored file holding the QC test account. Never read or printed directly by the agent."
+    }
+  },
+
+  "definitions": {
+    "androidProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "avd": { "type": "string", "description": "Emulator to auto-boot when it is not already running." },
+        "udid": { "type": "string", "description": "Pin a specific running emulator. Leave empty to let Appium choose." },
+        "deviceName": { "type": "string" },
+        "caps": { "$ref": "#/definitions/capsOverride" }
+      }
+    },
+    "capsOverride": {
+      "type": "object",
+      "description": "Raw Appium capabilities merged last, after everything derived from this configuration. The escape hatch for an unusual device, so a one-off capability never needs a schema change.",
+      "additionalProperties": true
+    }
+  }
+}

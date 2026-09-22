@@ -1,0 +1,11 @@
+# Never commit a real configuration or a real test account.
+qc.config.json
+qc.credentials.js
+qc.credentials.*.js
+
+# QC evidence from local runs.
+qc-reports/
+
+node_modules/
+.DS_Store
+*.log

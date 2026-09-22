@@ -1,0 +1,52 @@
+{
+  "name": "qc-check-skill",
+  "version": "1.0.0",
+  "description": "Agent-agnostic mobile QC skill. An AI agent drives your app on a real emulator through Appium, verifies the backend contract, and publishes an evidence-backed report. Works with Claude Code, Codex, or any tool-using agent.",
+  "bin": {
+    "qc-check": "bin/qc-check.js"
+  },
+  "files": [
+    "bin/",
+    "runtime/",
+    "skill/",
+    "agents/",
+    "docs/",
+    "qc.config.example.json",
+    "qc.config.schema.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node test/smoke.js",
+    "check:leaks": "node test/no-private-refs.js"
+  },
+  "keywords": [
+    "qc",
+    "appium",
+    "mobile-testing",
+    "android",
+    "ios",
+    "react-native",
+    "ai-agent",
+    "claude-code",
+    "codex",
+    "agent-skill",
+    "end-to-end-testing"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "peerDependencies": {
+    "webdriverio": ">=8"
+  },
+  "peerDependenciesMeta": {
+    "webdriverio": {
+      "optional": true
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mohamedma872/qc-check-skill.git"
+  },
+  "license": "MIT"
+}

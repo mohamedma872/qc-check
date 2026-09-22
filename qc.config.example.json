@@ -1,0 +1,116 @@
+{
+  "$schema": "./qc.config.schema.json",
+
+  "project": {
+    "name": "Example App",
+    "reportsDir": "qc-reports",
+    "locales": ["en"],
+    "rtlLocales": []
+  },
+
+  "tracker": {
+    "kind": "none",
+    "ticketPattern": "[A-Z]+-[0-9]+",
+    "site": "",
+    "projectKey": "",
+    "tools": {
+      "getIssue": "",
+      "addComment": "",
+      "addLabels": "",
+      "uploadAttachment": ""
+    },
+    "passLabel": "QC-Agent-Pass",
+    "blockedLabel": "BE-Blocking"
+  },
+
+  "repo": {
+    "defaultBranch": "main"
+  },
+
+  "app": {
+    "defaultFlavor": "staging",
+    "androidActivity": "com.example.app.MainActivity",
+    "envBanner": "",
+    "build": {
+      "android": "",
+      "ios": ""
+    },
+    "flavors": {
+      "staging": {
+        "androidPackage": "com.example.app.staging",
+        "iosBundleId": "com.example.app.staging"
+      },
+      "production": {
+        "androidPackage": "com.example.app",
+        "iosBundleId": "com.example.app"
+      }
+    }
+  },
+
+  "devices": {
+    "android": {
+      "enabled": true,
+      "avd": "QC_Phone_API36",
+      "udid": "",
+      "deviceName": "Android Phone"
+    },
+    "android_tablet": {
+      "enabled": false,
+      "avd": "",
+      "udid": "",
+      "deviceName": "Android Tablet"
+    },
+    "ios": {
+      "enabled": false,
+      "deviceName": "iPhone 16",
+      "udid": ""
+    },
+    "appium": {
+      "host": "127.0.0.1",
+      "port": 4723,
+      "newCommandTimeout": 900
+    }
+  },
+
+  "backend": {
+    "enabled": true,
+    "defaultEnv": "staging",
+    "baseUrls": {
+      "staging": "https://api.staging.example.com",
+      "production": ""
+    },
+    "healthPath": "/health",
+    "auth": {
+      "path": "/auth/login",
+      "method": "POST",
+      "usernameField": "username",
+      "passwordField": "password",
+      "tokenPath": "data.accessToken",
+      "extraBody": {}
+    },
+    "headers": {},
+    "smokePath": "/health"
+  },
+
+  "codeMap": {
+    "sourceDir": "src",
+    "navigationGlob": "src/navigation/*.tsx",
+    "translationsDir": "src/translations",
+    "apiServicesGlob": "src/api/services/**",
+    "mutationsGlob": "src/hooks/mutations/**",
+    "queriesGlob": "src/hooks/queries/**",
+    "utilsGlob": "src/utils/**",
+    "validationGlob": "src/validation/**",
+    "testCommand": "yarn jest",
+    "lintCommand": "yarn lint",
+    "typecheckCommand": "npx tsc --noEmit --skipLibCheck",
+    "testsGitignored": false
+  },
+
+  "budget": {
+    "currency": "USD",
+    "runCap": 30
+  },
+
+  "credentialsFile": "qc.credentials.js"
+}
