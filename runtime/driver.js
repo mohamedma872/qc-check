@@ -111,16 +111,34 @@ async function findCandidates(sessionId, platform, selector, text) {
   }
 
   if (text) {
-    let strategy, value;
     if (platform === 'ios') {
-      strategy = '-ios predicate string';
-      value = `label == "${text}" OR value == "${text}" OR name == "${text}"`;
+      const els = await tryFindAll(
+        sessionId,
+        '-ios predicate string',
+        `label == "${text}" OR value == "${text}" OR name == "${text}"`,
+      );
+      if (els.length) {return els;}
     } else {
-      strategy = '-android uiautomator';
-      value = `new UiSelector().textContains("${text}")`;
+      // Exact matches first. A substring search would also hit any longer text
+      // that happens to contain the word, such as a paragraph above a tab bar,
+      // and the first hit wins, so the tap lands on the wrong element.
+      for (const value of [
+        `new UiSelector().text("${text}")`,
+        `new UiSelector().description("${text}")`,
+      ]) {
+        const els = await tryFindAll(sessionId, '-android uiautomator', value);
+        if (els.length) {return els;}
+      }
+      const partial = await tryFindAll(
+        sessionId,
+        '-android uiautomator',
+        `new UiSelector().textContains("${text}")`,
+      );
+      if (partial.length) {
+        console.warn(`WARN: no exact match for "${text}", using a partial match (${partial.length} candidate(s)). Prefer a testID.`);
+        return partial;
+      }
     }
-    const els = await tryFindAll(sessionId, strategy, value);
-    if (els.length) {return els;}
 
     const xpath =
       platform === 'ios'
