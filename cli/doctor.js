@@ -18,7 +18,7 @@ const {
   which,
   listAvds,
   listIosSimulators,
-  appiumReachable,
+  appiumStatus,
   pkgVersion,
 } = require('./util');
 
@@ -125,10 +125,17 @@ async function run(args) {
   const apPort = ap.port || 4723;
   if (!which('appium')) {
     fix.push('appium is not on PATH. Install it with `npm i -g appium`, then add a driver.');
-  } else if (!appiumReachable(apHost, apPort)) {
-    fix.push(`no Appium server at ${apHost}:${apPort}. Start one with \`appium --port ${apPort}\`.`);
   } else {
-    ok.push(`appium reachable at ${apHost}:${apPort}`);
+    const st = appiumStatus(apHost, apPort);
+    if (st.state === 'none') {
+      fix.push(`no Appium server at ${apHost}:${apPort}. Start one with \`appium --port ${apPort}\`.`);
+    } else if (st.state === 'impostor') {
+      fix.push(
+        `something is listening on ${apHost}:${apPort} but it is not Appium. Find it with \`lsof -iTCP:${apPort} -sTCP:LISTEN\`, stop it, then start Appium.`,
+      );
+    } else {
+      ok.push(`appium ${st.version} reachable at ${apHost}:${apPort}`);
+    }
   }
 
   // -------------------------------------------------------------- backend

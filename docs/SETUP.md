@@ -250,6 +250,10 @@ starting over.
 | Login fails on device | Credentials file missing or unfilled | Fill `qc.credentials.js`; `doctor` reports presence only |
 | Session dies mid-pass | Appium idle timeout too short | Raise `devices.appium.newCommandTimeout` |
 | Two repos fighting over one session | Shared session file | Export `QC_SESSION_FILE` per repo |
+| `gateway is BLOCKED` | An edge proxy answered with its own HTML page, so the request never reached the API | On a VPN-only environment, connect the VPN. This is not a pass |
+| `something is listening ... but it is not Appium` | Another process holds the Appium port | `lsof -iTCP:4723 -sTCP:LISTEN`, stop it, start Appium |
+| `this screenshot looks blank` | Emulator GPU rendering that screen capture cannot read | Restart the emulator with `-gpu swiftshader_indirect` |
+| A tap reports OK but nothing changes | Usually a stale tree read before the screen settled | Screenshot after every tap and compare; the driver already touches the parent of a non-clickable label |
 
 ---
 

@@ -302,14 +302,24 @@ async function login() {
   return { token, headers: sessionHeaders(res) };
 }
 
-// Any HTTP status < 500 proves the gateway and the service answered; 401 just
-// means the auth wall is up, which still counts as alive.
+// Classify one probe. A status below 500 is only proof of life when the API
+// itself produced it. An edge proxy or firewall that refuses the connection
+// (typically a VPN-only environment reached without the VPN) answers 403 with
+// its own HTML page, and counting that as UP would wave the run through the
+// one gate meant to stop it.
 async function healthProbe() {
   try {
-    const { status } = await request('GET', backend.healthPath || '/health', null, null);
-    return status;
+    const { status, headers, raw } = await request('GET', backend.healthPath || '/health', null, null);
+    const type = String((headers && headers['content-type']) || '').toLowerCase();
+    const html = type.includes('text/html') || /^\s*<(!doctype|html)/i.test(String(raw || ''));
+    let verdict;
+    if (status >= 200 && status < 300) verdict = 'up';
+    else if (status === 401) verdict = 'up'; // the auth wall answering is still the API
+    else if (status >= 300 && status < 500) verdict = html ? 'blocked' : 'up';
+    else verdict = 'down';
+    return { status, verdict };
   } catch {
-    return 0;
+    return { status: 0, verdict: 'down' };
   }
 }
 
@@ -329,14 +339,26 @@ function printBody(raw) {
 (async () => {
   if (args.includes('--health')) {
     let up = false;
+    let blocked = false;
     for (let i = 1; i <= 3; i++) {
-      const code = await healthProbe();
-      console.log(`${ENV} gateway probe ${i}/3: HTTP ${code || 'timeout/unreachable'}`);
-      if (code >= 200 && code < 500) { up = true; }
+      const { status, verdict } = await healthProbe();
+      const note = verdict === 'blocked' ? ' (HTML from an edge proxy, not the API)' : '';
+      console.log(`${ENV} gateway probe ${i}/3: HTTP ${status || 'timeout/unreachable'}${note}`);
+      if (verdict === 'up') { up = true; }
+      if (verdict === 'blocked') { blocked = true; }
       if (i < 3) { await new Promise(r => setTimeout(r, 3000)); }
     }
-    console.log(up ? `OK: ${ENV} gateway is UP` : `STOP: ${ENV} gateway is DOWN - do not boot emulators`);
-    process.exit(up ? 0 : 3);
+    if (up) {
+      console.log(`OK: ${ENV} gateway is UP`);
+      process.exit(0);
+    }
+    if (blocked) {
+      console.log(`STOP: ${ENV} gateway is BLOCKED - an edge proxy refused the request before it reached the API.`);
+      console.log('   If this environment is VPN-only, connect the VPN and re-run. Do not boot emulators.');
+    } else {
+      console.log(`STOP: ${ENV} gateway is DOWN - do not boot emulators`);
+    }
+    process.exit(3);
   }
 
   if (args.includes('--token')) {

@@ -301,7 +301,27 @@ async function cmdTap({ selector, text, x, y, within, index }) {
     console.error('   or tap by coordinate: tap --x <n> --y <n>');
     process.exit(1);
   }
-  await appiumRequest('POST', `/session/${sessionId}/element/${getElementId(el)}/click`, {});
+  const elId = getElementId(el);
+
+  // A text label inside a button is often not clickable itself. An element
+  // click on it is accepted and silently does nothing, which reads as a pass.
+  // A real touch at its centre reaches the clickable parent, the way a finger
+  // does, so use that whenever the match is not clickable.
+  if (platform === 'android') {
+    const attr = await appiumRequest('GET', `/session/${sessionId}/element/${elId}/attribute/clickable`);
+    if (String(attr.value) === 'false') {
+      const rect = (await appiumRequest('GET', `/session/${sessionId}/element/${elId}/rect`)).value || {};
+      if (rect.width !== undefined) {
+        const cx = rect.x + rect.width / 2;
+        const cy = rect.y + rect.height / 2;
+        await pointerAt(sessionId, cx, cy, 60);
+        console.log(`OK: tapped "${selector || text}" by touch at (${Math.round(cx)}, ${Math.round(cy)}), the match itself is not clickable`);
+        return;
+      }
+    }
+  }
+
+  await appiumRequest('POST', `/session/${sessionId}/element/${elId}/click`, {});
   console.log(`OK: tapped "${selector || text}"`);
 }
 
@@ -366,8 +386,23 @@ async function cmdScreenshot({ name }) {
     .replace(/\s+/g, '-')
     .replace(/[^a-zA-Z0-9-_]/g, '');
   const filepath = path.join(dir, `${slug || 'screenshot'}-${ts}.png`);
-  fs.writeFileSync(filepath, Buffer.from(res.value, 'base64'));
+  const png = Buffer.from(res.value, 'base64');
+  fs.writeFileSync(filepath, png);
   console.log(`OK: screenshot saved: ${filepath}`);
+
+  // A capture of a single flat colour compresses to almost nothing. Evidence
+  // that is secretly a blank image is worse than no evidence, so say so.
+  // Common cause: an emulator on host GPU rendering that screen capture cannot
+  // read. Width and height sit at fixed offsets in the PNG header.
+  if (png.length > 24 && png.toString('ascii', 12, 16) === 'IHDR') {
+    const w = png.readUInt32BE(16);
+    const h = png.readUInt32BE(20);
+    const bytesPerPixel = png.length / Math.max(1, w * h);
+    if (bytesPerPixel < 0.01) {
+      console.warn(`WARN: this screenshot looks blank (${png.length} bytes for ${w}x${h}). Do not use it as evidence.`);
+      console.warn('   On an Android emulator, restart it with -gpu swiftshader_indirect and capture again.');
+    }
+  }
 }
 
 // Read one credential field for the active environment. The value is returned

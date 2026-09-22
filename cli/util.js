@@ -251,9 +251,31 @@ function listIosSimulators() {
   }
 }
 
+// Something answering on the port is not enough: any process can squat it.
+// A real Appium server reports its build version in /status.
 function appiumReachable(host, port) {
   const res = tryExec('curl', ['-s', '-m', '2', `http://${host}:${port}/status`]);
-  return res.ok && res.stdout.includes('"value"');
+  if (!res.ok) return false;
+  try {
+    const v = JSON.parse(res.stdout).value || {};
+    return Boolean(v.ready !== false && v.build && v.build.version);
+  } catch (_) {
+    return false;
+  }
+}
+
+// Distinguish "nothing listening" from "something else listening", because the
+// fix for each is different.
+function appiumStatus(host, port) {
+  const res = tryExec('curl', ['-s', '-m', '2', `http://${host}:${port}/status`]);
+  if (!res.ok || !res.stdout) return { state: 'none' };
+  try {
+    const v = JSON.parse(res.stdout).value || {};
+    if (v.build && v.build.version) return { state: 'appium', version: v.build.version };
+  } catch (_) {
+    /* not JSON */
+  }
+  return { state: 'impostor' };
 }
 
 // ------------------------------------------------------------------ misc
@@ -303,6 +325,7 @@ module.exports = {
   listAvds,
   listIosSimulators,
   appiumReachable,
+  appiumStatus,
   deepMerge,
   pkgVersion,
   homedir: os.homedir,

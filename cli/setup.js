@@ -439,7 +439,9 @@ function detectProjectName(host, stack) {
 // A flavor named like a test environment is a better QC default than the
 // production one, which nobody should be driving with a test account.
 function preferredFlavor(names) {
-  const wanted = ['staging', 'stage', 'dev', 'develop', 'development', 'qa', 'uat', 'debug', 'sprint'];
+  // Earliest shared environment first: QC on a feature targets the build the
+  // team integrates on, not the one customers accept or the one they use.
+  const wanted = ['staging', 'stage', 'sprint', 'dev', 'develop', 'development', 'qa', 'test', 'uat', 'debug'];
   for (const w of wanted) {
     const hit = names.find((n) => n.toLowerCase() === w);
     if (hit) return hit;
@@ -510,7 +512,7 @@ function detect(host) {
 // Turn detections into a config fragment. Only non-empty values are set, so
 // nothing detected means nothing overwritten.
 function detectedConfig(d) {
-  const cfg = { project: {}, agent: {}, repo: {}, app: { build: {} }, devices: { android: {}, ios: {} }, codeMap: {} };
+  const cfg = { project: {}, agent: {}, repo: {}, app: { build: {} }, devices: { android: {}, ios: {} }, backend: {}, codeMap: {} };
 
   if (d.projectName) cfg.project.name = d.projectName;
   if (d.locales.locales.length) {
@@ -524,6 +526,14 @@ function detectedConfig(d) {
   if (d.defaultBranch) cfg.repo.defaultBranch = d.defaultBranch;
 
   if (d.defaultFlavor) cfg.app.defaultFlavor = d.defaultFlavor;
+  // Name the backend environment after the flavor, since a flavor build points
+  // at its matching backend. Seed a slot per flavor so the TODO names real keys.
+  if (d.defaultFlavor) {
+    cfg.backend.defaultEnv = d.defaultFlavor;
+    const urls = {};
+    for (const name of Object.keys(d.flavors).length ? Object.keys(d.flavors) : [d.defaultFlavor]) urls[name] = '';
+    cfg.backend.baseUrls = urls;
+  }
   if (d.android.activity) cfg.app.androidActivity = d.android.activity;
   if (Object.keys(d.flavors).length) cfg.app.flavors = d.flavors;
   if (d.commands.android) cfg.app.build.android = d.commands.android;
