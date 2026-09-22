@@ -1,21 +1,22 @@
 # Fix loop: turn findings into verified fixes and PRs
 
 Triggered when the argument starts with `fix`. It takes the findings of a prior
-run (default: the most recent `<reportsDir>/*-state.json` that has findings, or
-the given RUN-ID, for example `fix FULL-SWEEP` or `fix ABC-123`) and loops
+run (default: the most recent run that has findings, or the given RUN-ID, for
+example `fix FULL-SWEEP` or `fix ABC-123`) and loops
 **triage -> root-cause -> fix -> re-verify on device -> branch -> push -> PR**
 until every app-side finding is fixed and verified, or explicitly deferred.
 
-Track progress in `<reportsDir>/<RUN-ID>-fixes.md` (the fix board) and in your
+Track progress in the fix board (`fixes.md` in the run folder) and in your
 visible task list, one task per fix (Claude Code: TaskCreate/TaskUpdate; Codex
 and other agents: whatever plan or todo surface they show the user).
 
-`qc/` is the installed runtime inside the host repo and `<reportsDir>/` is
-`config.project.reportsDir` (default `qc-reports`).
+`qc/` is the installed runtime inside the host repo. The run folder is printed
+by `node qc/runs.js current` relative to the ticket folder under `qc-reports/`
+(default `qc-reports`).
 
 ## 1. Triage: classify every finding first
 
-Write the fix board (`<reportsDir>/<RUN-ID>-fixes.md`) with one row per finding:
+Write the fix board (`fixes.md` in the run folder) with one row per finding:
 `F<n> | finding | class | branch/PR | status`. Classes:
 
 - **app-fix** - a defect in the app code, fixable here (wrong binding, dead
@@ -46,12 +47,12 @@ Write the fix board (`<reportsDir>/<RUN-ID>-fixes.md`) with one row per finding:
 4. **Re-verify ON DEVICE.** Rebuild and reinstall with
    `config.app.build.android` (or `config.app.build.ios`), asking the user for
    the command and waiting if that key is empty. Then drive to the screen with
-   `node qc/driver.js` and screenshot the proof to
-   `<reportsDir>/fix-<slug>-verified.png`. Debug builds
-   that load their bundle from a dev server often only need an app relaunch;
-   rebuild when native or bundle configuration changed. **A fix that was not
-   re-verified on device is not "fixed": it stays in progress.** Also make
-   `<config.codeMap.testCommand> <touched-suites>` green.
+   `node qc/driver.js` and screenshot the proof into the run folder
+   (`screenshots/` subfolder). Debug builds that load their bundle from a dev
+   server often only need an app relaunch; rebuild when native or bundle
+   configuration changed. **A fix that was not re-verified on device is not
+   "fixed": it stays in progress.** Also make `<config.codeMap.testCommand>
+   <touched-suites>` green.
 5. **Commit** with a QC-traceable message:
    `fix(qc): <what> - found by QC run <RUN-ID> (F<n>)`, with the body giving the
    root cause and the verification evidence path.
@@ -63,9 +64,9 @@ Write the fix board (`<reportsDir>/<RUN-ID>-fixes.md`) with one row per finding:
      `git remote get-url origin` and print that link instead. Do not invent a PR
      command.
 
-   Either way, write the ready-to-paste PR description to
-   `<reportsDir>/fix-<slug>-pr.md`: what and why, the root cause, the evidence
-   screenshots, the QC run reference, and verification steps for the reviewer.
+   Either way, write the ready-to-paste PR description to `pr.md` in the run
+   folder: what and why, the root cause, the evidence screenshots, the QC run
+   reference, and verification steps for the reviewer.
 7. **Flip the fix board row** (fixed, plus branch and PR link) and update the
    original run's plan and report cells if the fix clears a failed case.
 

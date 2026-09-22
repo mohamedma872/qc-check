@@ -49,41 +49,107 @@ you need a value. The runtime scripts under `qc/` read it for you.
 
 | You need | Read |
 |---|---|
-| Where evidence and state go | `config.project.reportsDir`, written `<reportsDir>/` below |
+| Where evidence and state go | This run's folder, written `<run>/` below. See "Where evidence goes" |
+| Which environment this run targets | `QC_ENV`, see "One run, one environment" |
 | Languages to cover, and which are RTL | `config.project.locales`, `config.project.rtlLocales` |
 | Ticket id shape, tracker, tool names, labels | `config.tracker.*` |
 | Package, bundle id, activity, flavor | `config.app.*` |
 | How to build and install the app | `config.app.build.android`, `config.app.build.ios` |
 | Proof the build is the right flavor | `config.app.envBanner` |
+| Every environment, and which are protected | `config.app.flavors`, `config.backend.baseUrls`, `config.backend.protectedEnvs` |
 | Branch to diff against, how to open a PR | `config.repo.defaultBranch`, `config.repo.prCommand` |
 | Which device profiles exist and are enabled | `config.devices.android`, `config.devices.android_tablet`, `config.devices.ios` |
 | Appium endpoint | `config.devices.appium` |
 | Backend base URLs, auth, health and smoke paths | `config.backend.*` |
 | Where the app's code lives, how to test it | `config.codeMap.*` |
 | Run cost cap | `config.budget.runCap`, `config.budget.currency` |
-| Test credentials | `config.credentialsFile`, via the scripts only, see below |
+| Test credentials for this environment | via the scripts only, see below |
 
-**Credentials.** The file named by `config.credentialsFile` is gitignored and
-holds a real username and password. Never open it, never `cat` it, never print
-a value, and never write one into a report, a log, or a screenshot caption.
-`node qc/api.js` logs in from it by itself, and `node qc/driver.js` types from
-it without the value ever passing through you:
+**Credentials.** Each environment has its own QC test account. It lives in the
+gitignored file named by `config.credentialsFile`, or in the variables
+`QC_CRED_<ENV>_USERNAME` and `QC_CRED_<ENV>_PASSWORD` (CI uses these). You never
+read either. Never open the file, never `cat` it, never `require` it, never
+echo or print a `QC_CRED_*` variable, and never write a value into a report, a
+log, or a screenshot caption. `node qc/api.js` logs in for the active
+environment by itself. On the device, this is the only way to type an account
+value:
 
 ```bash
 node qc/driver.js input --selector <username-field-testID> --credential username
 node qc/driver.js input --selector <password-field-testID> --credential password
 ```
 
-For a credential field that flag does not cover, let the shell carry the value
-so it still never passes through you:
+The driver picks the account for `QC_ENV` and the value never passes through
+you. If a login needs a field the flag cannot type, stop and ask the user;
+do not work around it. When the scripts say there are no credentials for the
+environment, stop and ask the user to run `qc-check env credentials <env>` (or
+to set the two variables in CI). Do not create or edit the file yourself.
 
-```bash
-node qc/driver.js input --selector <id> --text "$(node -p "const c=require('./qc/config.js').loadCredentials(); c[process.env.QC_ENV||c.env].<field>")"
+## One run, one environment
+
+A run targets exactly one environment, named by `QC_ENV`. `qc-check run ABC-123
+--env uat` sets it for you; without `--env` it is `config.backend.defaultEnv`.
+Everything follows that one name:
+
+| What | Follows `QC_ENV` as |
+|---|---|
+| Backend | `config.backend.baseUrls.<env>`, used by `qc/api.js` |
+| App build | the flavor of the same name in `config.app.flavors`, its package and bundle id. `QC_FLAVOR` overrides the flavor alone |
+| Build command | `config.app.build.*`, with `{flavor}` replaced by that flavor |
+| Credentials | the account for `<env>`, typed by `driver.js --credential` |
+| Evidence | the run folder `<reportsDir>/ABC-123/<env>/<run-id>/` |
+
+Rules:
+
+- **Never switch environments mid-run.** Do not change or export `QC_ENV`, do
+  not pass a different `--env` to `api.js`, and do not install another
+  flavor. If the ticket needs a second environment, finish this run, then tell
+  the user to start another with `qc-check run ABC-123 --env <other>`. It gets
+  its own run folder.
+- **State the environment in the report header** (see
+  `references/reporting.md`) and in the plan header.
+- **Protected environments** (`config.backend.protectedEnvs`, plus any named
+  prod, production, live or release) need `--allow-protected` on
+  `qc-check run`. If you are running against one, the user chose that on
+  purpose. Still run no write test case there that the approved plan does not
+  list.
+
+## Where evidence goes
+
+Every run has its own folder. You are told it at the start: it is in your
+prompt, in `$QC_RUN_DIR`, and `node qc/runs.js current` prints it (as JSON,
+with its `dir`). It is written `<run>/` below.
+
+```
+<reportsDir>/                     config.project.reportsDir
+  index.md, index.json            every run, newest first
+  _unsorted/                      captures made with no run in progress
+  ABC-123/<env>/
+    current                       id of the run a re-run resumes
+    <run-id>/                     UTC timestamp, e.g. 2026-09-22T17-03-26Z
+      summary.json                machine-readable outcome (scripts write it)
+      state.json                  run state (state.js)
+      cost.json, cost.md          run cost (cost.js)
+      plan.md                     test plan (you write it)
+      report.md                   final report (you write it)
+      screenshots/001-name.png    driver.js screenshot --name <name>
+      recordings/001-name.mp4     record.sh stop <name>
+      trees/001-name.txt          dump-tree.js --save <name>
+      api/001-name.json           api.js ... --save <name>, redacted
 ```
 
-The credentials object itself prints as `[credentials redacted]`. If the file
-is missing or a field is empty, stop and ask the user to create it from
-`qc/credentials.example.js` (`qc-check setup` writes it) and fill it in.
+- You write only `plan.md`, `report.md` and the few notes the references name
+  (for example `ticket.md` when there is no tracker), and only in `<run>/`.
+- Evidence is placed by the scripts. Give a short `--name` (no `/`, no
+  extension) and the script numbers it in capture order and prints the path.
+  **Never invent a path for evidence**, never pass one, and never move or
+  rename a capture. Cite each file in the report by the path the script
+  printed, relative to `<run>/`, for example `screenshots/003-after-login.png`.
+- `summary.json` is rewritten by the scripts on every state change. Never edit
+  it.
+- A `WARN` that a capture went to `_unsorted/` means no run is active. Stop,
+  check `QC_RUN_DIR` and `node qc/runs.js current`, fix that, and capture again.
+  Nothing in `_unsorted/` counts as evidence for this run.
 
 ## Step 0: visible progress and resume, before anything else
 
@@ -100,7 +166,8 @@ stopped. Five mechanisms, all mandatory:
    scratch**, no matter why the previous run stopped (crash, closed session,
    context loss, user abort). First rebuild your context from disk: the state
    output above (phases, sub-steps, notes, findings), the plan board
-   `<reportsDir>/ABC-123-plan.md`, and the evidence already in `<reportsDir>/`.
+   `<run>/plan.md`, and the evidence already in `<run>/`. A resume continues
+   the same run folder (`current`), on the same environment.
    Then tell the user what already passed and **resume at the `phase/sub-step`
    it suggests**. Do not redo a green smoke test, a passed phone run, or the
    sub-steps a phase already cleared. An approved `test-plan` stays approved;
@@ -131,7 +198,7 @@ stopped. Five mechanisms, all mandatory:
    ```
    For **device phases**, `plan` the pass before starting it, replacing the
    generic `cases` step with one step per test case in the **approved test
-   plan**. The numbering must match `<reportsDir>/ABC-123-plan.md`, e.g.
+   plan**. The numbering must match `<run>/plan.md`, e.g.
    `plan phone preflight,connect,login,record,case-1,case-2,case-3,teardown`.
    Keep the visible task list in sync at the same granularity: when a sub-step
    starts, update the phase task's live label to `<phase> [k/N] <sub-step>` so
@@ -139,7 +206,7 @@ stopped. Five mechanisms, all mandatory:
    blocks also gets a one-line status message carrying the note.
 
 4. **Track run cost.** `state.js set` auto-snapshots usage per phase into
-   `<reportsDir>/ABC-123-run-cost.{json,md}` through `qc/cost.js`. The
+   `<run>/cost.json` and `<run>/cost.md` through `qc/cost.js`. The
    `baseline` snapshot above makes per-session deltas honest in mixed sessions.
    You never need to call `cost.js` manually mid-run, only
    `node qc/cost.js ABC-123 get` when assembling the report, which must include
@@ -153,7 +220,7 @@ stopped. Five mechanisms, all mandatory:
    ```bash
    node qc/state.js ABC-123 finding <red|yellow> <text>   # red = backend or product, yellow = quality or tooling
    ```
-   Everything the report needs must live on disk under `<reportsDir>/`: run
+   Everything the report needs must live on disk under `<run>/`: run
    state with its sub-steps, notes and findings, the approved plan with its
    progress cells, and per-step screenshots and videos. If a fact matters for
    the report, write it down when you learn it, not when you assemble.
@@ -163,7 +230,7 @@ stopped. Five mechanisms, all mandatory:
 | # | Phase (`state.js` name) | What | Default sub-steps | Read first |
 |---|---|---|---|---|
 | 1 | `ticket` | Get the ticket ID and fetch the ticket | `derive-id, fetch-ticket, read-code` | below |
-| 2 | `test-plan` | Write DoD and numbered test cases to `<reportsDir>/ABC-123-plan.md`. **Gate: THE USER MUST APPROVE before anything below runs** | `dod, test-cases, write-md, approval` | `references/test-plan.md` |
+| 2 | `test-plan` | Write DoD and numbered test cases to `<run>/plan.md`. **Gate: THE USER MUST APPROVE before anything below runs** | `dod, test-cases, write-md, approval` | `references/test-plan.md` |
 | 3 | `contract` | Verify the app-to-backend REST contract: code, backend ticket, live gateway | `identify-write, be-ref, live-check, verdict` | `references/backend-contract.md` |
 | 4 | `smoke` | Backend live smoke test. **Gate: red means STOP, never boot emulators** | `health, auth, roundtrip, verdict` | `references/backend-contract.md` |
 | 5 | `phone` | Full device pass on the Android phone profile (`config.devices.android`). **Required** | `preflight, connect, login, record, case-1…N, teardown` | `references/device-driving.md` |
@@ -208,7 +275,7 @@ Then fetch the ticket:
   backend sub-tasks and "blocked by", and design links.
 - `config.tracker.kind` is `none`, or the tool name is empty: there is nothing
   to fetch. Ask the user to paste the ticket text and its acceptance criteria,
-  wait for the answer, and save it to `<reportsDir>/ABC-123-ticket.md` so a
+  wait for the answer, and save it to `<run>/ticket.md` so a
   resumed run does not ask twice. Record the sub-step as
   `step ticket fetch-ticket pass no tracker configured, ACs supplied by user`.
 
@@ -234,7 +301,7 @@ element missing a `testID` as a finding.
 
 Follow `references/test-plan.md`. Derive the **Definition of Done** from the
 acceptance criteria, write **numbered test cases** using the real selectors
-from Phase 1, save both to `<reportsDir>/ABC-123-plan.md`, then **STOP and get
+from Phase 1, save both to `<run>/plan.md`, then **STOP and get
 the user's approval**. Present Approve or Request changes, wait for the answer,
 and iterate until approved. Your adapter names the tool that asks the user a
 question and blocks on the reply. `state.js` refuses to start any later phase
@@ -252,12 +319,14 @@ against a dead backend wastes many minutes. Follow
   `set contract skipped presentational change`.
 - If `config.backend.enabled` is false there is no backend to check. Skip both
   phases with that reason and say so in the report.
-- The environment is `config.backend.defaultEnv`, overridable by the `QC_ENV`
-  environment variable, and its base URL is `config.backend.baseUrls.<env>`.
+- The environment is this run's `QC_ENV` (see "One run, one environment"),
+  and its base URL is `config.backend.baseUrls.<env>`.
   Health is `config.backend.healthPath` (`api.js --health`), the cheap
   authenticated read is `config.backend.smokePath` (`api.js --smoke`), and
   login is `config.backend.auth.*`. `qc/api.js` applies all of this, including
-  `config.backend.headers`.
+  `config.backend.headers`. Add `--save <name>` to a contract probe or a
+  smoke request to keep its response as evidence in `<run>/api/`, with
+  tokens and credentials redacted.
 
 ### Phases 5 to 7: device passes, phone required, tablet and iOS on request
 
@@ -269,10 +338,12 @@ cannot run: say so instead of silently skipping. A form factor that was
 requested but cannot be built or booted is BLOCKED for that form factor, not a
 pass.
 
-The build under test is `config.app.defaultFlavor`, overridable by `QC_FLAVOR`,
+The build under test is the flavor named like the run's environment (else
+`config.app.defaultFlavor`), overridable by `QC_FLAVOR`,
 which resolves to `config.app.flavors.<flavor>.androidPackage` and
 `.iosBundleId` and launches at `config.app.androidActivity`. Build and install
-it with `config.app.build.android` or `config.app.build.ios`. An empty build
+it with `config.app.build.android` or `config.app.build.ios`; a `{flavor}` in
+the command is replaced with that flavor. An empty build
 command means there is no agreed way to build here: ask the user how, or ask
 them to install the build, before the `preflight` sub-step ends.
 
@@ -307,7 +378,7 @@ Publish degrades with the tracker:
 |---|---|
 | A tracker, and `config.tracker.tools.addComment` non-empty | Post the report as a comment, attach evidence with `config.tracker.tools.uploadAttachment`, apply `config.tracker.passLabel` or `config.tracker.blockedLabel` with `config.tracker.tools.addLabels` per the verdict, then confirm the write back to the user |
 | A tracker, but a tool name is empty | Do what is available. For the rest, print the exact text and file paths for the user to paste, and mark those sub-steps `skipped no <tool> configured` |
-| `none` | Nothing external to write. `set publish skipped no tracker configured`, then tell the user where the report and evidence are: `<reportsDir>/ABC-123-report.md` and the attachments beside it |
+| `none` | Nothing external to write. `set publish skipped no tracker configured`, then tell the user where the report and evidence are: `<run>/report.md` and the evidence folders beside it |
 
 Posting to a tracker is a write to an external system. Ask before the first
 write unless the user already approved publishing for this run. The same holds
@@ -322,14 +393,15 @@ takes `--help`.
 
 ```bash
 node qc/driver.js <cmd>                 # tap/input/assert/screenshot/swipe/connect/disconnect
-node qc/dump-tree.js [--grep x]         # live accessibility tree with enabled state and tap centers
+node qc/dump-tree.js [--grep x] [--save name]   # live accessibility tree; --save keeps it in <run>/trees/
 node qc/api.js --health                 # is the configured gateway up? gate for the smoke phase
 node qc/api.js --smoke                  # login, then the authenticated read at backend.smokePath
-node qc/api.js GET|POST <path>          # authenticated REST against the gateway
+node qc/api.js GET|POST <path> [--save name]    # authenticated REST; --save keeps it in <run>/api/
+node qc/runs.js current                 # this run: ticket, env, id and folder, as JSON
 node qc/config.js --json                # the resolved config, after defaults are merged
-node qc/config.js --reports-dir         # absolute evidence directory, created if missing
+node qc/config.js --reports-dir         # absolute root of all runs, created if missing
 node qc/config.js --caps <profile>      # Appium capabilities for android|android_tablet|ios
-qc/record.sh start|stop <out.mp4>       # session screen recording, defensive
+qc/record.sh start|stop <name>          # session screen recording into <run>/recordings/, defensive
 node qc/state.js ABC-123 get|set|step|plan|finding|reset   # resumable state, sub-step progress, findings log
 node qc/cost.js ABC-123 snapshot|get|reset                 # cost tracking, auto-fired by state.js set; `get` for the report
 ```
@@ -353,12 +425,12 @@ nothing else:
 - **`unit-tests`**: run the existing suites with `config.codeMap.testCommand`,
   but never commit. Mark the `commit` sub-step `skipped eval mode`.
 - **`publish`**: skip the whole phase, `set publish skipped eval mode`. The
-  `report` phase still assembles `<reportsDir>/ABC-123-report.md` with its
+  `report` phase still assembles `<run>/report.md` with its
   `## Overall:` line. That file is what the grader reads.
 - **Budget**: `QC_BUDGET` is the run's cap. Past it, device commands stop,
   which in headless mode ends the run. Prefer finishing the report over one
   more test case.
 
 Gates, evidence on disk, and the findings log are unchanged. The grader scores
-what the run left in `<reportsDir>/`, so persist findings the moment you see
+what the run left in `<run>/` (and its `summary.json`), so persist findings the moment you see
 them.

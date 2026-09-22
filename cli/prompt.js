@@ -22,6 +22,7 @@ const {
   reportsDirOf,
   credentialsPathOf,
 } = require('./util');
+const { resolveEnv, guardProtected, runKey, peekRun, buildFor, isProtected } = require('./envs');
 
 // The phase documents SKILL.md tells the agent to read when it gets there.
 const REFERENCES = [
@@ -125,7 +126,7 @@ function enabledProfiles(cfg) {
   return out;
 }
 
-function configSection(host, cfg) {
+function configSection(host, cfg, env) {
   const W = 22;
   const out = [];
   const project = cfg.project || {};
@@ -162,23 +163,22 @@ function configSection(host, cfg) {
   out.push('');
 
   out.push('App under test');
-  const flavor = app.defaultFlavor || 'staging';
+  const flavor = (app.flavors || {})[env] ? env : app.defaultFlavor || env;
   const flavorCfg = (app.flavors || {})[flavor] || {};
   line(out, 'flavor', flavor, W);
   line(out, 'android package', flavorCfg.androidPackage, W);
   line(out, 'ios bundle id', flavorCfg.iosBundleId, W);
   line(out, 'android activity', app.androidActivity, W);
   line(out, 'env banner', app.envBanner || '(none set: verify the flavor another way)', W);
-  line(out, 'build android', (app.build && app.build.android) || '(none: ask before building)', W);
-  line(out, 'build ios', (app.build && app.build.ios) || '(none: ask before building)', W);
+  line(out, 'build android', buildFor(cfg, 'android', env) || '(none: ask before building)', W);
+  line(out, 'build ios', buildFor(cfg, 'ios', env) || '(none: ask before building)', W);
   out.push('');
 
   if (backend.enabled === false) {
     out.push('Backend');
     out.push('  disabled: skip the contract and smoke phases and say so in the report.');
   } else {
-    const env = backend.defaultEnv || 'staging';
-    out.push(`Backend (active environment: ${env})`);
+    out.push(`Backend (environment: ${env})`);
     line(out, 'base url', (backend.baseUrls || {})[env] || '(not configured)', W);
     line(out, 'health path', backend.healthPath, W);
     line(out, 'smoke path', backend.smokePath, W);
@@ -188,7 +188,9 @@ function configSection(host, cfg) {
     line(out, 'token path', auth.tokenPath, W);
     const headers = renderMap(backend.headers, true);
     line(out, 'constant headers', headers, W);
-    out.push(`  ${'credentials'.padEnd(W)}  ${credentialsPathOf(host, cfg)} (gitignored: never open, cat or echo it)`);
+    out.push(`  ${'credentials'.padEnd(W)}  resolved by the runtime for "${env}". Type them with`);
+    out.push(`  ${''.padEnd(W)}  node qc/driver.js input --selector <id> --credential username|password.`);
+    out.push(`  ${''.padEnd(W)}  Never open ${path.basename(credentialsPathOf(host, cfg))} and never read QC_CRED_* variables.`);
   }
   out.push('');
 
@@ -249,6 +251,41 @@ function referencesDir(host) {
   return path.join(PKG_ROOT, 'skill', 'references');
 }
 
+function environmentSection(cfg, env, runDir, runRoot) {
+  const out = [];
+  out.push('## Environment');
+  out.push('');
+  out.push(`This run targets exactly one environment: ${env}${isProtected(cfg, env) ? ' (PROTECTED: explicitly allowed for this run)' : ''}.`);
+  out.push('The build, the backend and the test account all follow it. Never switch');
+  out.push('environments mid-run, and state the environment in the report header.');
+  out.push('');
+  out.push(`Every qc/ command must run with QC_ENV=${env}. If \`echo $QC_ENV\` does not print`);
+  out.push(`${env}, prefix each command: \`QC_ENV=${env} node qc/state.js ...\`.`);
+  out.push('');
+  out.push('## Where evidence goes');
+  out.push('');
+  if (runDir) {
+    out.push(`Run folder: ${runDir}`);
+  } else {
+    out.push(`Run folder: created under ${runRoot}/ by the first \`node qc/state.js <ID> ...\`.`);
+  }
+  out.push('`node qc/runs.js current` prints it at any time. Inside it:');
+  out.push('');
+  out.push('  plan.md          you write it (test plan)');
+  out.push('  report.md        you write it, with the "## Overall: PASS|FAIL|BLOCKED" line');
+  out.push('  state.json       qc/state.js keeps it');
+  out.push('  summary.json     qc/state.js keeps it: machine-readable outcome');
+  out.push('  cost.json/.md    qc/cost.js keeps them');
+  out.push('  screenshots/     qc/driver.js screenshot --name <label>');
+  out.push('  recordings/      qc/record.sh start|stop <label>');
+  out.push('  trees/           qc/dump-tree.js --save <label>');
+  out.push('  api/             qc/api.js ... --save <label> (redacted)');
+  out.push('');
+  out.push('Evidence files are numbered and placed by the scripts. Do not invent');
+  out.push('paths for evidence and do not write anywhere else under the reports dir.');
+  return out.join('\n');
+}
+
 function layoutSection(host, cfg) {
   const refs = referencesDir(host);
   const out = [];
@@ -258,13 +295,10 @@ function layoutSection(host, cfg) {
   out.push(`Run every \`node ${RUNTIME_DIR}/...\` command from there.`);
   out.push('');
   out.push('Runtime scripts (each takes --help):');
-  for (const f of ['driver.js', 'dump-tree.js', 'api.js', 'config.js', 'state.js', 'cost.js']) {
+  for (const f of ['driver.js', 'dump-tree.js', 'api.js', 'config.js', 'state.js', 'cost.js', 'runs.js']) {
     out.push(`  ${path.join(host, RUNTIME_DIR, f)}`);
   }
   out.push(`  ${path.join(host, RUNTIME_DIR, 'record.sh')}`);
-  out.push('');
-  out.push('Evidence, state, plan and report all land in:');
-  out.push(`  ${reportsDirOf(host, cfg)}`);
   out.push('');
   out.push('Phase references. They are NOT included above: read each one with');
   out.push('your file-reading tool when you reach that phase, and not before.');
@@ -299,7 +333,9 @@ function headlessSection() {
 // ---------------------------------------------------------------- assembly
 
 // The single assembly used by both `qc-check prompt` and `qc-check run`.
-function buildPrompt({ host, cfg, target, headless }) {
+function buildPrompt({ host, cfg, target, headless, env, runDir }) {
+  const theEnv = env || resolveEnv(cfg);
+  const peek = peekRun(host, cfg, runKey(target), theEnv);
   const wf = workflowFile();
   if (!fs.existsSync(wf)) {
     fail(`the workflow file is missing from the installed package: ${wf}`);
@@ -309,7 +345,7 @@ function buildPrompt({ host, cfg, target, headless }) {
   const parts = [];
   parts.push(
     [
-      `# Task: QC run - ${target.label}`,
+      `# Task: QC run - ${target.label} on ${theEnv}`,
       '',
       'You are running a device-level QC pass on the mobile app in this',
       `repository, target ${target.label}. The complete workflow follows. It is`,
@@ -318,7 +354,8 @@ function buildPrompt({ host, cfg, target, headless }) {
     ].join('\n'),
   );
   parts.push(['---- BEGIN QC WORKFLOW ----', '', workflow, '', '---- END QC WORKFLOW ----'].join('\n'));
-  parts.push(configSection(host, cfg));
+  parts.push(configSection(host, cfg, theEnv));
+  parts.push(environmentSection(cfg, theEnv, runDir || peek.dir, peek.root));
   parts.push(layoutSection(host, cfg));
   parts.push(targetSection(target));
   if (headless) parts.push(headlessSection());
@@ -344,7 +381,9 @@ async function run(args) {
   }
 
   const headless = args.headless === true || args.headless === 'true' || Boolean(cfg.agent && cfg.agent.headless);
-  const text = buildPrompt({ host, cfg, target, headless });
+  const env = resolveEnv(cfg, args.env);
+  guardProtected(cfg, env, args);
+  const text = buildPrompt({ host, cfg, target, headless, env });
 
   if (args.out && args.out !== true) {
     const out = path.resolve(String(args.out));
@@ -370,6 +409,8 @@ Targets
 
 Options
   --dir <path>    use this repository instead of the current one
+  --env <name>    the environment the prompt targets
+  --allow-protected  required for a protected environment such as prod
   --headless      include the eval-mode rules (no questions, no publishing)
   --out <file>    write the prompt to a file instead of stdout
 

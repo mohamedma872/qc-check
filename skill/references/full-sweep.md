@@ -1,26 +1,26 @@
 # Full-app sweep mode: QC every screen, no ticket needed
 
 Triggered when the argument is `full`, `all` or `sweep` instead of a ticket id.
-The run uses the pseudo-ticket **`FULL-SWEEP`** for state, plan and evidence
-(`node qc/state.js FULL-SWEEP ...`). Everything in the main skill still applies:
-resume rules, the visible task list, the findings log, and the test-plan
-approval gate.
+The run uses the pseudo-ticket **`FULL-SWEEP`** for state, plan and evidence.
+Everything in the main skill still applies: resume rules, the visible task list,
+the findings log, and the test-plan approval gate.
 
-`qc/` is the installed runtime inside the host repo and `<reportsDir>/` is
-`config.project.reportsDir` (default `qc-reports`).
+`qc/` is the installed runtime inside the host repo. The run folder is printed
+by `node qc/runs.js current` relative to `qc-reports/FULL-SWEEP/sprint/`
+(default `qc-reports`).
 
 ## Phase mapping in sweep mode
 
 | Phase | Sweep meaning |
 |-------|---------------|
 | `ticket` | Build the **screen inventory from the navigation code** (below). Derive it fresh every run: new screens must appear in the sweep |
-| `test-plan` | Auto-generate the per-screen checklist into `<reportsDir>/FULL-SWEEP-plan.md`. **The user approval gate still applies** |
+| `test-plan` | Auto-generate the per-screen checklist into `plan.md` in the run folder. **The user approval gate still applies** |
 | `contract` | `set contract skipped sweep mode` (there is no single feature contract) |
 | `smoke` | Health and auth, plus **one authenticated read per main screen's endpoint**, so a dead endpoint is known before the emulator boots |
 | `phone` | The sweep itself: one sub-step per screen (`plan` them all before starting), one round per entry in `config.project.locales` |
 | `tablet` / `ios` | Only if explicitly requested, same sweep |
 | `unit-tests` | `set unit-tests skipped sweep mode` (no new logic under test) |
-| `report` / `publish` | Sweep report (matrix below). With no ticket, save `<reportsDir>/FULL-SWEEP-report.md` and ask the user whether they want it posted anywhere. If `config.tracker.kind` is `"none"`, skip `publish` and leave the report on disk |
+| `report` / `publish` | Sweep report (matrix below). With no ticket, save `report.md` in the run folder and ask the user whether they want it posted anywhere. If `config.tracker.kind` is `"none"`, skip `publish` and leave the report on disk |
 
 ## Screen inventory (derive fresh in the `ticket` phase)
 
@@ -82,8 +82,9 @@ Derive it from the navigation code plus a first walk of the app:
 
 ## Per-screen checks (the screen contract, every screen, every locale)
 
-1. **Renders.** Screenshot named `FULL-SWEEP-<screen>-<locale>`. No crash
-   overlay, no perpetual spinner (over 10 seconds), no blank screen.
+1. **Renders.** Screenshot placed in the `screenshots/` subfolder of the run
+   folder. No crash overlay, no perpetual spinner (over 10 seconds), no blank
+   screen.
 2. **Key elements present.** `node qc/dump-tree.js`: the title and the primary
    content or CTA are visible. Record any interactive element with **no testID**
    (one yellow finding per screen, listing the elements).
@@ -103,7 +104,7 @@ Derive it from the navigation code plus a first walk of the app:
 6. **Scroll check.** On scrollable screens, swipe to the bottom once. Clipped or
    overlapping content down there counts too.
 
-## Sweep plan file (`<reportsDir>/FULL-SWEEP-plan.md`)
+## Sweep plan file (`plan.md` in the run folder)
 
 ```markdown
 # QC Full Sweep - all screens
@@ -131,9 +132,9 @@ resolve: the plan is the live progress board.
 - **Order.** Logged-in screens first (tabs, then their stacks, then the form
   flows), auth screens last, because clearing the session ends the logged-in
   half of the sweep.
-- **Recording.** One recording per locale round
-  (`<reportsDir>/FULL-SWEEP-phone-<locale>.mp4`), restarted between rounds:
-  30 minutes is the Appium cap.
+- **Recording.** One recording per locale round placed in the `recordings/`
+  subfolder of the run folder, restarted between rounds: 30 minutes is the
+  Appium cap.
 - **Budget.** A full sweep is long. Persist every screen result the moment you
   observe it (`step phone s-<screen> pass|fail [note]` plus the plan cell) so an
   interrupted sweep resumes at the exact screen. Watch the run against

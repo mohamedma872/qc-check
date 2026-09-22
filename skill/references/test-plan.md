@@ -7,9 +7,10 @@ call or emulator boot, writes both to a reviewable markdown file, and **stops
 for the user's approval**. The approved file then doubles as the live progress
 board: later phases flip its status cells as cases resolve.
 
-`qc/` is the installed runtime inside the host repo, `<reportsDir>/` is
-`config.project.reportsDir` (default `qc-reports`), and `ABC-123` stands for the
-ticket id (validated against `config.tracker.ticketPattern`).
+`qc/` is the installed runtime inside the host repo, `<run>/` is this run's folder (it is in your prompt, in `$QC_RUN_DIR`, and
+`node qc/runs.js current` prints it), `<env>` is the run's
+environment (`QC_ENV`), and `ABC-123` stands for the ticket id (validated
+against `config.tracker.ticketPattern`).
 
 Sub-steps (record each with `node qc/state.js ABC-123 step test-plan <name> <status>`):
 `dod` -> `test-cases` -> `write-md` -> `approval`.
@@ -49,12 +50,12 @@ were requested (`-` where not applicable). A case you cannot make concrete
 (missing testID, unreachable screen) is a finding to note in the plan, not a
 reason to skip planning it.
 
-## 3. `write-md` - write `<reportsDir>/ABC-123-plan.md`
+## 3. `write-md` - write `<run>/plan.md`
 
 ```markdown
 # QC Test Plan - ABC-123: <title>
 Status: AWAITING APPROVAL   <!-- flip to: APPROVED by user on YYYY-MM-DD -->
-Branch: <branch> · PR: #<n> · Backend: <env> · Platforms: Android phone[ + tablet + iOS]
+Environment: <env> · Branch: <branch> · PR: #<n> · Backend: <config.backend.baseUrls[env]> · Platforms: Android phone[ + tablet + iOS]
 
 ## Definition of Done
 | # | Done means | Verified by | Status |
@@ -75,14 +76,19 @@ Legend: pending · PASS · FAIL · BLOCKED · n/a for this form factor
 - <explicitly not verified + why>
 ```
 
+The plan covers one environment, the run's `<env>`. A case that only makes
+sense on another environment goes under "Out of scope" with that reason; it
+belongs to a separate run.
+
 Use whatever status glyphs the rest of the run uses, as long as the plan, the
 state file and the report agree. Keep the table columns stable: the device
 phases edit these cells in place.
 
 ## 4. `approval` - HARD GATE: the user must approve
 
-1. Post a short summary to the user: DoD count, case count, what is covered,
-   anything you flagged out of scope, plus the file path so they can open it.
+1. Post a short summary to the user: the environment, DoD count, case count,
+   what is covered, anything you flagged out of scope, plus the path of
+   `<run>/plan.md` so they can open it.
 2. **Ask the user and wait for an answer**: *"Approve the QC test plan for
    ABC-123?"* with the options **Approve** and **Request changes** (their notes
    come back with it). Use whatever your agent offers for a blocking question

@@ -105,28 +105,86 @@ qc-check setup --yes
 
 ---
 
-## 4. Fill in the test account
+## 4. Environments and test accounts
 
-`setup` created a credentials file and gitignored it. Open it and put in a real
-QC account:
+`setup` created a credentials file and gitignored it. For each environment your
+app supports (sprint, uat, prod), it asks you for a base URL and optionally a
+QC username and password. The password is typed hidden (asterisks).
+
+Credentials live in `qc.credentials.js`, which you can edit by hand or manage
+with commands:
 
 ```js
 module.exports = {
-  env: 'staging',
-  staging: { username: 'CHANGE_ME', password: 'CHANGE_ME' },
+  "sprint": { "username": "qa-sprint", "password": "..." },
+  "uat": { "username": "qa-uat", "password": "..." }
 };
 ```
 
-This file is the one thing you must edit by hand. It is deliberately not
-detected, not prompted for, and never printed.
+This file is marked with a comment on the first line and has file permissions 0600.
+If you hand-wrote it (no marker), qc-check never modifies it and says so.
 
-The agent never reads it. When the workflow needs to log in, it runs
-`qc/driver.js input --credential password`, which types the value straight into
-the device. Nothing lands in a transcript, a log or a report.
+Change credentials later with:
+
+```bash
+qc-check env credentials sprint
+qc-check env credentials sprint --remove
+```
+
+For CI, set environment variables instead: `QC_CRED_<ENV>_USERNAME` and
+`QC_CRED_<ENV>_PASSWORD`, where `<ENV>` is the environment name uppercased with
+non-alphanumerics turned into underscores. For example, `QC_CRED_UAT_USERNAME`.
+The environment variables win over the file.
+
+Environments named prod, production, live or release, plus any listed in
+`backend.protectedEnvs` in the config, are PROTECTED. A run against them is
+refused unless you pass `--allow-protected`, because a QC run logs in and can
+write data.
+
+Protected environments do not ask for credentials by default. Provide them if
+your protected environment needs QC access.
+
+The agent never reads the credentials file. When the workflow needs to log in,
+it runs `qc/driver.js input --credential password`, which types the value
+straight into the device. Nothing lands in a transcript, a log or a report.
 
 ---
 
-## 5. Check the configuration
+## 5. Where the output goes
+
+Evidence is organized under `project.reportsDir` (default `qc-reports`):
+
+```
+qc-reports/
+  index.md, index.json              every run, newest first
+  .active.json                      the run in progress, gitignored
+  _unsorted/                        artifacts with no run in progress
+  ABC-123/sprint/
+    current                         id of the run a re-run resumes
+    2026-09-22T17-03-26Z/           one run
+      summary.json                  machine-readable outcome
+      report.md  plan.md  state.json  cost.json  cost.md
+      screenshots/                  numbered like 001-login.png
+      recordings/  trees/  api/
+  FULL-SWEEP/
+    2026-09-22T17-04-00Z/           sweep run
+```
+
+The configuration key `project.commitReports` controls what goes in git:
+- false (default) gitignores the whole `qc-reports` directory
+- true keeps reports, plans, summaries and screenshots in git and ignores only
+  `<reportsDir>/**/recordings/`, `<reportsDir>/.active.json` and
+  `<reportsDir>/_unsorted/`
+
+`summary.json` contains the machine-readable result: schema version, ticket id,
+environment, runId, when it started and when it last updated, the verdict
+(PASS/FAIL/BLOCKED or null), phases with their results, findings counts (red,
+yellow, total), artifact counts (screenshots, recordings, trees, api calls),
+app info, backend URL, spend in USD, and the list of files written.
+
+---
+
+## 6. Check the configuration
 
 Open `qc.config.json` and confirm the parts `setup` could not detect. The full
 key reference is in [CONFIGURATION.md](CONFIGURATION.md); these are the ones
@@ -180,7 +238,7 @@ and use a `{prompt}` placeholder, or the prompt arrives on stdin.
 
 ---
 
-## 6. Verify
+## 7. Verify
 
 ```bash
 qc-check doctor
@@ -204,7 +262,7 @@ Ready to run: qc-check run ABC-123
 
 ---
 
-## 7. First run
+## 8. First run
 
 Start the Appium server, boot the emulator with your app installed, then:
 
@@ -215,6 +273,12 @@ qc-check run ABC-123
 The run stops early and asks you to approve a test plan. That gate is
 deliberate. Read the plan, because everything after it is spent driving a
 device against those cases.
+
+To test against a specific environment (for example uat instead of the default):
+
+```bash
+qc-check run ABC-123 --env uat
+```
 
 Other ways to start a run:
 
@@ -228,8 +292,11 @@ qc-check run ABC-123 --dry-run   # show what would be executed
 While it runs, and after:
 
 ```bash
-qc-check status ABC-123      # phases, sub-steps, findings, resume point
-qc-check report ABC-123      # the finished report
+qc-check status ABC-123                 # phases, sub-steps, findings, resume point
+qc-check status ABC-123 --env uat       # status for a specific environment
+qc-check report ABC-123                 # the finished report
+qc-check report ABC-123 --env uat       # report for a specific environment
+qc-check report ABC-123 --json          # summary.json instead of markdown
 ```
 
 Stop a run whenever you like. State is written to disk after every step, so
@@ -248,10 +315,13 @@ starting over.
 | Agent binary not on PATH | Agent CLI not installed | Install it, or set `agent.kind` to `none` and use `qc-check prompt` |
 | Run stops at the smoke phase | The backend is down or unreachable | Intended. A dead backend stops the run before emulators boot |
 | Login fails on device | Credentials file missing or unfilled | Fill `qc.credentials.js`; `doctor` reports presence only |
+| No credentials stored for an environment | Credentials file does not have that environment | `qc-check env credentials <env>` to add them, or set `QC_CRED_<ENV>_USERNAME` and `QC_CRED_<ENV>_PASSWORD` |
 | Session dies mid-pass | Appium idle timeout too short | Raise `devices.appium.newCommandTimeout` |
 | Two repos fighting over one session | Shared session file | Export `QC_SESSION_FILE` per repo |
+| `refused: the target environment is protected` | Run targets prod, production, live or release, or an environment in `backend.protectedEnvs` | Pass `--allow-protected` if you really mean to QC that environment |
 | `gateway is BLOCKED` | An edge proxy answered with its own HTML page, so the request never reached the API | On a VPN-only environment, connect the VPN. This is not a pass |
 | `something is listening ... but it is not Appium` | Another process holds the Appium port | `lsof -iTCP:4723 -sTCP:LISTEN`, stop it, start Appium |
+| Evidence landing in `_unsorted/` instead of a run folder | No run was in progress when the scripts captured an artifact | Restart the run or ensure `qc-check run` or `qc-check status` completed successfully |
 | `this screenshot looks blank` | Emulator GPU rendering that screen capture cannot read | Restart the emulator with `-gpu swiftshader_indirect` |
 | A tap reports OK but nothing changes | Usually a stale tree read before the screen settled | Screenshot after every tap and compare; the driver already touches the parent of a non-clickable label |
 

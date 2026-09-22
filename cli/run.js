@@ -24,6 +24,7 @@ const {
   tryExec,
   appiumReachable,
 } = require('./util');
+const { resolveEnv, guardProtected, runKey, peekRun, hostRuntime, isProtected } = require('./envs');
 
 const { buildPrompt, resolveTarget } = require('./prompt');
 
@@ -74,7 +75,7 @@ function needsLogin(cfg) {
   return ['android', 'android_tablet', 'ios'].some((n) => devices[n] && devices[n].enabled === true);
 }
 
-function preflight(host, cfg) {
+function preflight(host, cfg, env) {
   const problems = [];
   heading('Preflight');
 
@@ -97,15 +98,23 @@ function preflight(host, cfg) {
   }
 
   if (needsLogin(cfg)) {
-    // Presence only. The contents are the agent's business, through the
-    // runtime scripts, and never this process's.
-    const creds = credentialsPathOf(host, cfg);
-    if (fs.existsSync(creds)) ok('credentials file present', creds);
-    else {
+    // Presence only, per environment. The values are the runtime's business.
+    let status = null;
+    try {
+      if (!fs.existsSync(path.join(host, RUNTIME_DIR, 'runs.js'))) throw new Error('old runtime');
+      const { config } = hostRuntime(host, env);
+      status = config.credentialStatus(env);
+    } catch (_) {
+      status = fs.existsSync(credentialsPathOf(host, cfg)) ? 'file' : 'missing';
+    }
+    if (status === 'file' || status === 'env') {
+      ok(`credentials for ${env}`, status === 'env' ? 'from QC_CRED_* variables' : 'from the credentials file');
+    } else {
+      const key = String(env).toUpperCase().replace(/[^A-Z0-9]/g, '_');
       bad(
         problems,
-        `credentials file missing at ${creds}`,
-        'copy qc/credentials.example.js to it and fill in the QC test account',
+        `no usable credentials for ${env} (${status})`,
+        `run \`qc-check env credentials ${env}\`, or export QC_CRED_${key}_USERNAME and QC_CRED_${key}_PASSWORD`,
       );
     }
   }
@@ -216,12 +225,12 @@ function quoteIfNeeded(s) {
 
 // ------------------------------------------------------------------ launch
 
-function launch(spec, { host, prompt, timeoutMinutes }) {
+function launch(spec, { host, prompt, timeoutMinutes, childEnv }) {
   return new Promise((resolve) => {
     const child = spawn(spec.cmd, spec.argv, {
       cwd: host,
       stdio: spec.stdinPrompt ? ['pipe', 'inherit', 'inherit'] : 'inherit',
-      env: process.env,
+      env: childEnv || process.env,
     });
 
     if (spec.stdinPrompt) {
@@ -265,18 +274,29 @@ function launch(spec, { host, prompt, timeoutMinutes }) {
 
 // ------------------------------------------------------------------- after
 
-function evidence(host, cfg, target) {
-  const dir = reportsDirOf(host, cfg);
+function evidence(host, cfg, target, env, run, runs) {
   heading('Evidence');
-  info(`  reports dir  ${dir}`);
-  const state = path.join(dir, `${target.id}-state.json`);
-  info(`  state file   ${state}${fs.existsSync(state) ? '' : ' (not written yet)'}`);
-  const report = path.join(dir, `${target.id}-report.md`);
-  if (fs.existsSync(report)) info(`  report       ${report}`);
+  let summary = null;
+  if (run && runs) {
+    try {
+      summary = runs.writeSummary(run);
+      runs.rebuildIndex();
+    } catch (_) {
+      /* the listing below still helps */
+    }
+  }
+  info(`  environment  ${env}`);
+  info(`  run folder   ${run ? run.dir : '(not opened)'}`);
+  if (summary) {
+    info(`  verdict      ${summary.verdict || 'no report yet'}`);
+    info(`  findings     ${summary.findings.red} red, ${summary.findings.yellow} yellow`);
+    info(`  evidence     ${summary.artifacts.screenshots} screenshots, ${summary.artifacts.recordings} recordings, ${summary.artifacts.api} api captures`);
+  }
+  info(`  index        ${path.join(reportsDirOf(host, cfg), 'index.md')}`);
   info('');
   const arg = target.mode === 'fix' ? `fix ${target.id}` : target.mode === 'sweep' ? 'all' : target.id;
-  info(`  qc-check status ${arg}      where the run got to`);
-  info(`  qc-check report ${arg}      the report itself`);
+  info(`  qc-check status ${arg} --env ${env}      where the run got to`);
+  info(`  qc-check report ${arg} --env ${env}      the report itself`);
 }
 
 // ----------------------------------------------------------------- command
@@ -319,13 +339,19 @@ async function run(args) {
 
   const headless = args.headless === true || args.headless === 'true' || Boolean(agentCfg.headless);
   const dryRun = args['dry-run'] === true || args['dry-run'] === 'true';
-  const prompt = buildPrompt({ host, cfg, target, headless });
+  const env = resolveEnv(cfg, args.env);
+  guardProtected(cfg, env, args);
+  const key = runKey(target);
+  const peek = peekRun(host, cfg, key, env);
+  let prompt = buildPrompt({ host, cfg, target, headless, env, runDir: peek.dir });
 
   // kind none never launches anything: the prompt is the deliverable.
   if (kind === 'none') {
     if (dryRun) {
       heading('Dry run (agent kind: none)');
       info(`  target      ${target.label}`);
+      info(`  environment ${env}${isProtected(cfg, env) ? ' (protected, allowed)' : ''}`);
+      info(`  run folder  ${peek.dir ? `resumes ${peek.dir}` : `new, under ${peek.root}`}`);
       info(`  headless    ${headless ? 'yes' : 'no'}`);
       info(`  cwd         ${host}`);
       info('');
@@ -345,6 +371,8 @@ async function run(args) {
   if (dryRun) {
     heading(`Dry run (agent kind: ${kind})`);
     info(`  target      ${target.label}`);
+    info(`  environment ${env}${isProtected(cfg, env) ? ' (protected, allowed)' : ''}`);
+    info(`  run folder  ${peek.dir ? `resumes ${peek.dir}` : `new, under ${peek.root}`}`);
     info(`  headless    ${headless ? 'yes' : 'no'}`);
     info(`  cwd         ${host}`);
     info(`  timeout     ${agentCfg.timeoutMinutes || 180} min`);
@@ -354,7 +382,7 @@ async function run(args) {
     return;
   }
 
-  const problems = preflight(host, cfg);
+  const problems = preflight(host, cfg, env);
   if (problems.length > 0) {
     info('');
     fail(`${problems.length} ${problems.length === 1 ? 'thing' : 'things'} to fix before a run can succeed. See FIX above.`);
@@ -372,7 +400,16 @@ async function run(args) {
     return;
   }
 
-  heading(`Running QC: ${target.label}`);
+  // Open (or resume) the run folder now, so the agent is told exactly where its
+  // evidence goes and every script it calls agrees.
+  const { runs } = hostRuntime(host, env);
+  const theRun = runs.openRun({ ticket: key, env });
+  prompt = buildPrompt({ host, cfg, target, headless, env, runDir: theRun.dir });
+  const childEnv = { ...process.env, QC_ENV: env, QC_RUN_DIR: theRun.dir };
+  if (headless) childEnv.QC_EVAL = '1';
+
+  heading(`Running QC: ${target.label} on ${env}`);
+  info(`  run      ${theRun.created ? 'new' : 'resuming'} ${theRun.dir}`);
   info(`  agent    ${kind} (${spec.cmd})`);
   info(`  mode     ${headless ? 'headless: plan auto-approved, no commits, no publishing' : 'interactive: you approve the test plan'}`);
   info(`  timeout  ${agentCfg.timeoutMinutes || 180} min`);
@@ -382,6 +419,7 @@ async function run(args) {
     host,
     prompt,
     timeoutMinutes: agentCfg.timeoutMinutes || 180,
+    childEnv,
   });
 
   if (result.error) {
@@ -389,12 +427,12 @@ async function run(args) {
     return;
   }
 
-  evidence(host, cfg, target);
+  evidence(host, cfg, target, env, theRun, runs);
 
   if (result.timedOut) {
     info('');
     const arg = target.mode === 'fix' ? `fix ${target.id}` : target.mode === 'sweep' ? 'all' : target.id;
-    info(`qc-check: timed out. Resume with \`qc-check run ${arg}\`: the run continues from disk.`);
+    info(`qc-check: timed out. Resume with \`qc-check run ${arg} --env ${env}\`: the run continues from disk.`);
     process.exitCode = result.code || 124;
     return;
   }
@@ -416,12 +454,14 @@ Targets
 
 Options
   --dir <path>      use this repository instead of the current one
+  --env <name>      the environment to test; build, backend and account follow it
+  --allow-protected required to target a protected environment such as prod
   --headless        no questions: auto-approve the plan, no commits, no publishing
   --agent <kind>    override agent.kind for this run: claude, codex, custom, none
   --dry-run         print exactly what would be executed, and run nothing
 
 What happens
-  1. A short preflight: config, runtime, credentials file, Appium, devices.
+  1. A short preflight: config, runtime, credentials for the environment, Appium, devices.
   2. The prompt is assembled, exactly as \`qc-check prompt\` prints it.
   3. Your agent is launched with it, attached to this terminal so you can
      watch it and answer the test-plan approval gate.

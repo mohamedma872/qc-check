@@ -199,6 +199,49 @@ async function confirm(label, def = true) {
   return /^y(es)?$/i.test(answer);
 }
 
+// Ask for a secret without echoing it. Each keystroke prints an asterisk so
+// the user can see input is being received, and the value is never logged.
+function askSecret(question) {
+  if (!isInteractive()) return Promise.resolve('');
+  return new Promise((resolve) => {
+    const stdin = process.stdin;
+    process.stdout.write(question);
+    let value = '';
+    const wasRaw = stdin.isRaw;
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.setEncoding('utf8');
+    const onData = (chunk) => {
+      for (const ch of chunk) {
+        if (ch === '\r' || ch === '\n' || ch === '\u0004') {
+          stdin.setRawMode(wasRaw);
+          stdin.pause();
+          stdin.removeListener('data', onData);
+          process.stdout.write('\n');
+          resolve(value);
+          return;
+        }
+        if (ch === '\u0003') {
+          // Ctrl-C: restore the terminal before leaving.
+          stdin.setRawMode(wasRaw);
+          process.stdout.write('\n');
+          process.exit(130);
+        }
+        if (ch === '\u007f' || ch === '\b') {
+          if (value.length) {
+            value = value.slice(0, -1);
+            process.stdout.write('\b \b');
+          }
+          continue;
+        }
+        value += ch;
+        process.stdout.write('*');
+      }
+    };
+    stdin.on('data', onData);
+  });
+}
+
 // ------------------------------------------------------------------ tools
 
 // Is a command available on PATH?
@@ -320,6 +363,7 @@ module.exports = {
   ask,
   askWithDefault,
   confirm,
+  askSecret,
   which,
   tryExec,
   listAvds,

@@ -1,8 +1,8 @@
 # Report + publish (phases `report` + `publish`)
 
-`qc/` is the installed runtime inside the host repo, `<reportsDir>/` is
-`config.project.reportsDir` (default `qc-reports`), and `ABC-123` stands for the
-ticket id.
+`qc/` is the installed runtime inside the host repo, `<run>/` is this run's folder (it is in your prompt, in `$QC_RUN_DIR`, and
+`node qc/runs.js current` prints it), `<env>` is the run's
+environment (`QC_ENV`), and `ABC-123` stands for the ticket id.
 
 Sub-steps (record each with `node qc/state.js ABC-123 step <phase> <name> <status>`):
 
@@ -18,26 +18,31 @@ report even if earlier phases ran in a session you never saw. The sources are:
 
 - `node qc/state.js ABC-123 get --json` (phases, sub-step notes, the findings
   log);
-- the plan board `<reportsDir>/ABC-123-plan.md` (DoD and per-case results);
-- the evidence files in `<reportsDir>/` (screenshots, recordings).
+- the plan board `<run>/plan.md` (DoD and per-case results);
+- the evidence the scripts saved under `<run>/`: `screenshots/`,
+  `recordings/`, `trees/` and `api/`, each file numbered in capture order.
 
 The `## Findings` section below is the recorded findings log, not a
-recollection. Save the assembled report to `<reportsDir>/ABC-123-report.md`,
-which is also what gets pasted into the pull request.
+recollection. Save the assembled report to `<run>/report.md`, which is also
+what gets pasted into the pull request. Cite evidence by its path relative to
+`<run>/`, exactly as the script printed it. Do not rename or copy files to make
+the paths look nicer. The scripts pick up the `## Overall:` line from
+`report.md` into `summary.json`, so keep that heading exactly as below.
 
 ```
 # QC Report - ABC-123: [Title]
 Platforms: Android phone (<config.devices.android.avd>)[ · tablet (<config.devices.android_tablet.avd>) · iOS (<config.devices.ios.deviceName>) if run]
-Build: v<x.y.z> (<flavor> flavor, <config.app.flavors[flavor].androidPackage>) · Backend: <env> (<config.backend.baseUrls[env]>)
-Account: QC test account (masked) · Date: [today]
-Recordings: <reportsDir>/ABC-123-phone.mp4[ · -tablet.mp4] (attached to the ticket)
+Environment: <env> · Run: <run-id>
+Build: v<x.y.z> (<flavor> flavor, <config.app.flavors[flavor].androidPackage>) · Backend: <config.backend.baseUrls[env]>
+Account: QC test account for <env> (masked) · Date: [today]
+Recordings: recordings/001-phone.mp4[ · recordings/002-tablet.mp4] (attached to the ticket)
 
 ## Test cases
 | # | Test case | Phone | Evidence |
 |---|-----------|:-----:|----------|
-| TC1 | ... | PASS / FAIL / BLOCKED | <reportsDir>/<file>.png |
+| TC1 | ... | PASS / FAIL / BLOCKED | screenshots/004-tc1-saved.png, api/002-tc1-readback.json |
 
-(Numbering mirrors the approved plan, <reportsDir>/ABC-123-plan.md. Add a
+(Numbering mirrors the approved plan, plan.md. Add a
 Tablet/iOS column when those passes ran. FAIL: Expected vs Actual. BLOCKED: the
 blocker and whose scope it is. A requested form factor that could not be built
 or booted is BLOCKED, not a pass.)
@@ -65,7 +70,7 @@ board)
 [the "Run total" line from `node qc/cost.js ABC-123 get`, e.g. "$12.40 - output
 143k, fresh input 890k, cache write 1.2M, cache read 4.8M (2 sessions)".
 Against the cap from `config.budget.runCap` in `config.budget.currency`. The
-full per-phase table stays in <reportsDir>/ABC-123-run-cost.md; do not paste it
+full per-phase table stays in cost.md in the run folder; do not paste it
 into the report.]
 ```
 
@@ -92,8 +97,9 @@ A FAIL or BLOCKED run is *more* useful with its evidence.
 **If `config.tracker.kind` is `"none"`, or the tool name for a step is an empty
 string, there is nothing to publish to.** Skip the `publish` phase
 (`node qc/state.js ABC-123 set publish skipped 'tracker.kind=none'`), leave the
-report and its evidence on disk in `<reportsDir>/`, and tell the user the exact
-paths plus the one-paragraph verdict. That is a complete, successful run.
+report and its evidence on disk in `<run>/`, and tell the user the run folder,
+the `report.md` and `summary.json` paths, plus the one-paragraph verdict. That
+is a complete, successful run.
 
 Otherwise the tool names come from the config and you call them as your agent
 calls tools (an MCP tool name, a CLI, or an HTTP call, depending on the host):
@@ -107,11 +113,13 @@ calls tools (an MCP tool name, a CLI, or an HTTP call, depending on the host):
 1. **Report comment.** Call `config.tracker.tools.addComment` with the issue key
    (`ABC-123`) and the full report as the body. Lead with
    `QC Agent Report - ABC-123` and end with `Posted automatically by the QC
-   agent - Android phone, <env> backend.`
+   agent - Android phone, <env> environment.`
 
 2. **Attach the evidence.** Call `config.tracker.tools.uploadAttachment` once per
-   file: the per-case screenshots (the report's Evidence column) and the session
-   recordings `<reportsDir>/ABC-123-phone.mp4` and friends. Note in the sub-step
+   file: the per-case screenshots (the report's Evidence column, from
+   `<run>/screenshots/`) and the session recordings in `<run>/recordings/`.
+   Attach `api/` files only when a finding needs them; they are redacted, but
+   still check. Note in the sub-step
    which files landed. If uploads are unavailable, say so and keep the paths in
    the comment.
 
@@ -130,13 +138,13 @@ calls tools (an MCP tool name, a CLI, or an HTTP call, depending on the host):
 4. **Pull request.** If `config.repo.prCommand` is set, the same CLI can usually
    comment on a pull request too (for example `gh pr comment`): offer to post
    the report there. If it is empty, the report is saved at
-   `<reportsDir>/ABC-123-report.md`: tell the user it is ready to paste, and
+   `<run>/report.md`: tell the user it is ready to paste, and
    offer to open the PR URL if they share it.
 
 5. **Confirm** in your reply what landed where: the ticket comment and
    attachments (with the link, built from `config.tracker.site` and
    `config.tracker.projectKey` when they are set), the labels applied and
-   removed, and the report file path.
+   removed, and the `report.md` path in the run folder.
 
 ## Optional: codify the verified flow for a future e2e suite
 

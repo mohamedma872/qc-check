@@ -5,7 +5,8 @@ regressions.** Required for any ticket that adds or changes logic; skip only for
 pure presentational changes (styles, copy, layout), which device QC covers.
 
 `qc/` is the installed runtime inside the host repo and `ABC-123` stands for the
-ticket id. The test runner is `config.codeMap.testCommand`, the linter is
+ticket id. Unit tests do not depend on the run's environment, and this phase
+writes nothing into the run folder except through `state.js`. The test runner is `config.codeMap.testCommand`, the linter is
 `config.codeMap.lintCommand`, and the type checker is
 `config.codeMap.typecheckCommand`.
 

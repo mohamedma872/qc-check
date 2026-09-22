@@ -1,100 +1,137 @@
 'use strict';
 
-// qc-check status: what a run has done so far and where it would resume.
-// The runtime's state.js is the authoritative formatter, so delegate to it
-// when it is installed and fall back to reading the state file directly.
+// qc-check status: what runs exist, and what one run has done so far.
 
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const { info, fail, findHost, readConfig, reportsDirOf, RUNTIME_DIR } = require('./util');
+const { info, fail, heading, findHost, readConfig, reportsDirOf, RUNTIME_DIR } = require('./util');
+const { resolveEnv, hostRuntime, listEnvs } = require('./envs');
 
 function help() {
-  info(`qc-check status - show the state of a QC run.
+  info(`qc-check status - runs on disk, and where one of them stands.
 
 Usage
-  qc-check status [<ticket>] [--dir <path>] [--json]
+  qc-check status                       every run, newest first
+  qc-check status <ticket>              the current run for the default environment
+  qc-check status <ticket> --env uat    the current run for one environment
+  qc-check status <ticket> --run <id>   a specific earlier run
+  qc-check status <ticket> --json       its summary.json
 
-With no ticket, lists every run that has state on disk. A run is resumable:
-whatever it says, \`qc-check run <ticket>\` picks up from there rather than
-starting over.`);
+A run is resumable: \`qc-check run <ticket> --env <env>\` continues the current
+run for that environment rather than starting over.`);
 }
 
-function stateFiles(reportsDir) {
-  if (!fs.existsSync(reportsDir)) return [];
+function legacyFiles(reportsDir) {
+  if (!fs.existsSync(reportsDir)) return 0;
   return fs
     .readdirSync(reportsDir)
-    .filter((f) => f.endsWith('-state.json'))
-    .map((f) => ({ ticket: f.replace(/-state\.json$/, ''), file: path.join(reportsDir, f) }));
+    .filter((f) => fs.statSync(path.join(reportsDir, f)).isFile())
+    .filter((f) => !/^(index\.(md|json)|\.active\.json)$/.test(f)).length;
+}
+
+// Pick one run: an explicit id, else the current run for the environment.
+function pickRun(runsList, ticket, env, runId) {
+  const mine = runsList.filter((r) => r.ticket === ticket);
+  if (runId) return mine.find((r) => r.id === runId) || null;
+  return mine.find((r) => r.env === env && r.current) || mine.find((r) => r.env === env) || null;
 }
 
 async function run(args) {
   const host = findHost(args);
   const cfg = readConfig(host, { required: true });
   const reportsDir = reportsDirOf(host, cfg);
-  const ticket = args._[0];
+  const ticket = args._[0] ? String(args._[0]).toUpperCase() : null;
+
+  if (!fs.existsSync(path.join(host, RUNTIME_DIR, 'runs.js'))) {
+    fail('the runtime is missing or predates run folders. Run `qc-check setup`.');
+  }
+  const env = resolveEnv(cfg, args.env);
+  const { runs } = hostRuntime(host, env);
+  const all = runs.listRuns();
 
   if (!ticket) {
-    const runs = stateFiles(reportsDir);
-    if (runs.length === 0) {
+    runs.rebuildIndex();
+    if (all.length === 0) {
       info(`No runs yet in ${path.relative(host, reportsDir) || '.'}.`);
       info('Start one with: qc-check run ABC-123');
-      return;
-    }
-    info(`Runs in ${path.relative(host, reportsDir) || '.'}:`);
-    info('');
-    for (const r of runs) {
-      let summary = '';
-      try {
-        const st = JSON.parse(fs.readFileSync(r.file, 'utf8'));
-        const phases = st.phases || {};
-        const done = Object.values(phases).filter((p) => p && p.status === 'pass').length;
-        const total = Object.keys(phases).length;
-        const findings = (st.findings || []).length;
-        summary = `${done}/${total} phases, ${findings} finding(s)`;
-      } catch (_) {
-        summary = 'unreadable state file';
+    } else {
+      heading(`Runs in ${path.relative(host, reportsDir) || '.'} (newest first)`);
+      info(`  ${'ticket'.padEnd(14)} ${'env'.padEnd(10)} ${'run'.padEnd(22)} ${'verdict'.padEnd(12)} findings`);
+      for (const r of all) {
+        const s = r.summary;
+        info(
+          `  ${r.ticket.padEnd(14)} ${r.env.padEnd(10)} ${(r.id + (r.current ? ' *' : '')).padEnd(22)} ` +
+            `${String(s.verdict || 'in progress').padEnd(12)} ${s.findings.red} red, ${s.findings.yellow} yellow`,
+        );
       }
-      const reportPath = path.join(reportsDir, `${r.ticket}-report.md`);
-      const hasReport = fs.existsSync(reportPath) ? ', report ready' : '';
-      info(`  ${r.ticket.padEnd(14)} ${summary}${hasReport}`);
+      info('');
+      info('  * the run a re-run resumes');
+      info(`  index: ${path.join(reportsDir, 'index.md')}`);
     }
-    info('');
-    info('Detail: qc-check status ABC-123');
+    const legacy = legacyFiles(reportsDir);
+    if (legacy) {
+      info('');
+      info(`  ${legacy} older file(s) sit loose in ${path.relative(host, reportsDir)}/ from before run folders.`);
+      info('  They are left as they are; move or delete them when you no longer need them.');
+    }
     return;
   }
 
-  const id = String(ticket).toUpperCase();
-  const stateJs = path.join(host, RUNTIME_DIR, 'state.js');
+  const runId = args.run && args.run !== true ? String(args.run) : null;
+  const chosen = pickRun(all, ticket, env, runId);
+  if (!chosen) {
+    const elsewhere = [...new Set(all.filter((r) => r.ticket === ticket).map((r) => r.env))];
+    if (elsewhere.length) {
+      fail(
+        `no ${runId ? `run ${runId}` : 'run'} for ${ticket} on ${env}. It has runs on: ${elsewhere.join(', ')}.\n` +
+          `  Try: qc-check status ${ticket} --env ${elsewhere[0]}`,
+      );
+    }
+    fail(`no run for ${ticket}. Start one with: qc-check run ${ticket} --env ${env}`);
+    return;
+  }
 
   if (args.json) {
-    const f = path.join(reportsDir, `${id}-state.json`);
-    if (!fs.existsSync(f)) fail(`no run state for ${id} in ${path.relative(host, reportsDir)}`);
-    process.stdout.write(fs.readFileSync(f, 'utf8'));
+    process.stdout.write(`${JSON.stringify(runs.writeSummary(chosen), null, 2)}\n`);
     return;
   }
 
-  if (fs.existsSync(stateJs)) {
-    const res = spawnSync(process.execPath, [stateJs, id, 'get'], { cwd: host, stdio: 'inherit' });
-    process.exit(res.status === null ? 1 : res.status);
+  info(`${ticket} on ${chosen.env}, run ${chosen.id}${chosen.current ? ' (current)' : ''}`);
+  info(`folder: ${chosen.dir}`);
+  info('');
+
+  // The current run is what state.js resumes, so its formatter is exact.
+  if (chosen.current) {
+    const res = spawnSync(process.execPath, [path.join(host, RUNTIME_DIR, 'state.js'), ticket, 'get'], {
+      cwd: host,
+      stdio: 'inherit',
+      env: { ...process.env, QC_ENV: chosen.env, QC_RUN_DIR: chosen.dir },
+    });
+    if (res.status !== 0) process.exitCode = res.status || 1;
+  } else {
+    const s = runs.writeSummary(chosen);
+    for (const [phase, status] of Object.entries(s.phases)) info(`  ${phase.padEnd(12)} ${status}`);
+    info('');
+    info(`  verdict   ${s.verdict || 'no report'}`);
+    info(`  findings  ${s.findings.red} red, ${s.findings.yellow} yellow`);
   }
 
-  // Runtime not installed: read the file ourselves rather than refusing.
-  const f = path.join(reportsDir, `${id}-state.json`);
-  if (!fs.existsSync(f)) {
-    fail(`no run state for ${id}. Start one with: qc-check run ${id}`);
+  const others = all.filter((r) => r.ticket === ticket && r !== chosen);
+  if (others.length) {
+    info('');
+    info(`Other runs of ${ticket}:`);
+    for (const r of others) {
+      info(`  ${r.env.padEnd(10)} ${r.id}${r.current ? ' *' : ''}  ${r.summary.verdict || 'in progress'}`);
+    }
   }
-  const st = JSON.parse(fs.readFileSync(f, 'utf8'));
-  info(`${id} - QC run state (runtime not installed, showing raw state)`);
-  for (const [phase, v] of Object.entries(st.phases || {})) {
-    info(`  ${phase.padEnd(12)} ${(v && v.status) || 'pending'}`);
+
+  const known = listEnvs(cfg);
+  if (known.length > 1 && !args.env) {
+    info('');
+    info(`Environments: ${known.join(', ')}. Pick one with --env.`);
   }
-  for (const finding of st.findings || []) {
-    info(`  ${String(finding.severity || '').toUpperCase()}: ${finding.text || finding}`);
-  }
-  info('');
-  info(`Run \`qc-check setup\` to install the runtime for full detail.`);
 }
 
-module.exports = { run, help };
+module.exports = { run, help, pickRun };

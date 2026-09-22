@@ -5,7 +5,7 @@
 #
 # Usage:
 #   record.sh start [timeLimitSeconds]   # default 1800 (30 min, Appium max)
-#   record.sh stop [outfile.mp4]         # bare name => saved in the reports dir
+#   record.sh stop [name]                # bare name => the run's recordings/ folder
 #   record.sh --help
 set -u
 
@@ -18,18 +18,20 @@ QC screen recording
 
 Usage:
   record.sh start [timeLimitSeconds]   start recording (default limit 1800s)
-  record.sh stop [outfile.mp4]         stop and save the video
+  record.sh stop [name]                stop and save the video
   record.sh --help                     show this help
 
-An argument without a "/" is saved in the reports directory from
-project.reportsDir in qc.config.json. With no argument the file is named
-recording-<timestamp>.mp4 there.
+A name without a "/" is saved in the recordings/ folder of the run in
+progress, numbered in capture order (001-<name>.mp4); with no run in progress
+it goes to <reportsDir>/_unsorted/. With no name it is called "recording".
+An argument containing a "/" is used as the output path as given.
 
 Requires an active session created by driver.js connect. The Appium endpoint
 comes from the session record, falling back to devices.appium in qc.config.json.
 
 Environment:
   QC_SESSION_FILE   session state path (default /tmp/qc-session.json)
+  QC_RUN_DIR        run folder to save into (set by qc-check run)
 USAGE
 }
 
@@ -60,8 +62,13 @@ PORT=$(echo "$SESSION_INFO" | awk '{print $3}')
 [ -n "$PORT" ] || PORT=$(node "$SCRIPT_DIR/config.js" --appium-port 2>/dev/null || echo 4723)
 APPIUM="http://$HOST:$PORT"
 
-reports_dir() {
-  node "$SCRIPT_DIR/config.js" --reports-dir 2>/dev/null || echo "qc-reports"
+# Next numbered path in the run's recordings/ folder (runs.js prints a WARN on
+# stderr and falls back to _unsorted/ when no run is active). If even that
+# fails, the reports dir root keeps the video rather than losing it.
+recording_path() {
+  local name="$1"
+  node "$(dirname "$0")/runs.js" path recordings "$name" mp4 \
+    || echo "$(node "$SCRIPT_DIR/config.js" --reports-dir 2>/dev/null || echo qc-reports)/$name-$(date +%Y%m%d-%H%M%S).mp4"
 }
 
 case "${1:-}" in
@@ -77,15 +84,12 @@ case "${1:-}" in
     fi
     ;;
   stop)
-    OUT="${2:-}"
-    if [ -z "$OUT" ]; then
-      OUT="recording-$(date +%Y%m%d-%H%M%S).mp4"
-    fi
+    OUT="${2:-recording}"
     case "$OUT" in
       */*) : ;;                       # explicit path, used as given
-      *)   OUT="$(reports_dir)/$OUT" ;;
+      *)   OUT="$(recording_path "${OUT%.mp4}")" ;;
     esac
-    mkdir -p "$(dirname "$OUT")"
+    mkdir -p "$(dirname "$OUT")" 2>/dev/null || true
     # Node decodes the base64 payload: it is already a hard dependency here,
     # unlike python3.
     curl -s -X POST "$APPIUM/session/$SID/appium/stop_recording_screen" \
@@ -104,13 +108,18 @@ process.stdin.on("end", () => {
   const looksBase64 = typeof v === "string" && /^[A-Za-z0-9+/=\s]+$/.test(v);
   if (looksBase64 && v.length > 100) {
     const out = process.env.OUT;
-    fs.writeFileSync(out, Buffer.from(v, "base64"));
-    console.log("OK: saved " + out + " (" + fs.statSync(out).size + " bytes)");
+    try {
+      fs.writeFileSync(out, Buffer.from(v, "base64"));
+      console.log("OK: saved " + out + " (" + fs.statSync(out).size + " bytes)");
+    } catch (e) {
+      console.log("WARN: could not write " + out + " (" + e.code + ") - use the per-step screenshots as evidence");
+    }
   } else {
     console.log("WARN: recording EMPTY on this device - use the per-step screenshots as evidence");
   }
 });
-'
+' || echo "WARN: recording could not be saved - use the per-step screenshots as evidence"
+    exit 0
     ;;
   *)
     usage >&2

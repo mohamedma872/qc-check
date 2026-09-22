@@ -10,13 +10,15 @@
 // run must never fail because token accounting is missing.
 // Set QC_USAGE_SOURCE=none to force that path.
 //
-// Data:   <reportsDir>/<TICKET>-run-cost.json  (snapshots, source of truth)
-// Report: <reportsDir>/<TICKET>-run-cost.md    (regenerated from the JSON)
+// Data:   <run dir>/cost.json  (snapshots, source of truth; top-level totalUsd)
+// Report: <run dir>/cost.md    (regenerated from the JSON)
+// The run dir is <reportsDir>/<TICKET>/<env>/<run-id>/, resolved exactly as
+// state.js does (runs.js), so cost always sits next to the state it prices.
 //
 // Usage:
 //   node runtime/cost.js <TICKET> snapshot <label...>   # record cumulative usage now (e.g. baseline, phone:pass)
 //   node runtime/cost.js <TICKET> get [--json]          # print run summary
-//   node runtime/cost.js <TICKET> reset                 # clear cost data
+//   node runtime/cost.js <TICKET> reset                 # clear this run's cost data
 //
 // Snapshots are cumulative per session; deltas between consecutive snapshots in
 // the same session attribute cost to phases. The first snapshot in a session is
@@ -54,14 +56,30 @@ function usage() {
 let cached = null;
 function files() {
   if (!cached) {
-    const { reportsDir } = require('./config.js');
-    const dir = reportsDir();
+    const config = require('./config.js');
+    const runs = require('./runs.js');
+    const env = config.activeEnv();
+    // Same rule as state.js: QC_RUN_DIR wins when it names this ticket and env.
+    const fromEnv = process.env.QC_RUN_DIR ? runs.currentRun() : null;
+    const run = fromEnv && fromEnv.ticket === ticket && fromEnv.env === env
+      ? fromEnv
+      : runs.openRun({ ticket, env });
     cached = {
-      json: path.join(dir, `${ticket}-run-cost.json`),
-      md: path.join(dir, `${ticket}-run-cost.md`),
+      run,
+      runs,
+      json: path.join(run.dir, 'cost.json'),
+      md: path.join(run.dir, 'cost.md'),
     };
   }
   return cached;
+}
+
+// summary.json reads cost.totalUsd; a failure here must not fail the snapshot.
+function publish() {
+  try {
+    files().runs.writeSummary(files().run);
+    files().runs.rebuildIndex();
+  } catch { /* summary is derived data; the next write rebuilds it */ }
 }
 
 function cap() {
@@ -173,9 +191,17 @@ function load() {
 }
 
 function save(data) {
+  // Always numeric, so summary.json can read it without a type check. 0 when
+  // nothing was measured; usageMeasured says which.
+  const t = runTotals(data);
+  data.totalUsd = measured(data) ? Math.round(t.cost * 1e6) / 1e6 : 0;
+  data.usageMeasured = measured(data);
+  data.env = files().run.env;
+  data.runId = files().run.id;
   fs.mkdirSync(path.dirname(files().json), { recursive: true });
   fs.writeFileSync(files().json, JSON.stringify(data, null, 2) + '\n');
   fs.writeFileSync(files().md, renderMd(data));
+  publish();
 }
 
 function fmtTok(n) {
@@ -260,7 +286,7 @@ if (require.main === module) {
   if (ticketArg === '--help' || ticketArg === '-h' || cmd === '--help') {
     console.log(USAGE);
     console.log('');
-    console.log('Writes <project.reportsDir>/<TICKET>-run-cost.{json,md}.');
+    console.log('Writes <project.reportsDir>/<TICKET>/<env>/<run-id>/cost.{json,md} (env: QC_ENV or backend.defaultEnv).');
     console.log('Token usage is read from the Claude Code session transcript when there is one;');
     console.log('on any other agent it is recorded as "unavailable" and the run continues.');
     console.log('QC_USAGE_SOURCE=none forces "unavailable". Budget cap: budget.runCap or QC_BUDGET.');
@@ -304,6 +330,9 @@ if (require.main === module) {
       }
       case 'get': {
         const data = load();
+        // Refresh the files on every read so cost.json always carries a
+        // current totalUsd, even for a run with no snapshots yet.
+        save(data);
         if (!data.snapshots.length) {
           console.log(`(no cost data for ${ticket})`);
           break;
@@ -317,6 +346,7 @@ if (require.main === module) {
       }
       case 'reset': {
         for (const f of [files().json, files().md]) {if (fs.existsSync(f)) {fs.unlinkSync(f);}}
+        publish();
         console.log(`cost data for ${ticket} cleared`);
         break;
       }

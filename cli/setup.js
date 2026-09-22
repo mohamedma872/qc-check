@@ -10,6 +10,7 @@ const fs = require('fs');
 const path = require('path');
 
 const u = require('./util');
+const credFile = require('./credentials-file');
 
 // Locales that render right to left, used to seed project.rtlLocales.
 const RTL_LOCALES = ['ar', 'he', 'fa', 'ur'];
@@ -599,7 +600,43 @@ function describeDetections(d) {
 
 // --------------------------------------------------------------------- ask
 
+const PROD_LIKE = /^(prod|production|live|release)$/i;
+// credentials-file status values that mean an account is usable.
+const HAVE_ACCOUNT = ['env', 'file'];
+
+// Flavors and backend URLs are keyed by the same names, so the union is the
+// list of environments this project has.
+function envNames(cfg) {
+  const names = [];
+  for (const n of Object.keys((cfg.app && cfg.app.flavors) || {})) if (!names.includes(n)) names.push(n);
+  for (const n of Object.keys((cfg.backend && cfg.backend.baseUrls) || {})) if (!names.includes(n)) names.push(n);
+  if (names.length === 0 && cfg.app && cfg.app.defaultFlavor) names.push(cfg.app.defaultFlavor);
+  return names;
+}
+
+function isProtectedName(cfg, name) {
+  const listed = ((cfg.backend && cfg.backend.protectedEnvs) || []).map(n => String(n).toLowerCase());
+  return listed.includes(String(name).toLowerCase()) || PROD_LIKE.test(String(name));
+}
+
+// Presence only, so a prompt can say "one is already set" without reading it.
+function credentialsKnownFor(host, cfg, env) {
+  return HAVE_ACCOUNT.includes(credFile.status(u.credentialsPathOf(host, cfg), env));
+}
+
+// The username is not a secret, so it can be offered as the default.
+function credentialUsername(host, cfg, env) {
+  try {
+    const data = credFile.read(u.credentialsPathOf(host, cfg));
+    const block = data && data[env];
+    return (block && typeof block.username === 'string' && block.username !== 'CHANGE_ME') ? block.username : '';
+  } catch (_) {
+    return '';
+  }
+}
+
 async function askQuestions(host, d, cfg) {
+  const credentials = {};
   const answers = { project: {}, agent: {}, app: {}, devices: { android: {}, ios: {} }, backend: { auth: {}, baseUrls: {} } };
 
   u.heading('Step 1 of 4: project');
@@ -644,14 +681,10 @@ async function askQuestions(host, d, cfg) {
     u.info('  no agent CLI on PATH; qc-check will print the prompt for you to paste');
   }
 
-  u.heading('Step 4 of 4: backend');
+  u.heading('Step 4 of 5: backend');
   const hasBackend = await u.confirm('Does this app talk to a backend qc-check should check?', cfg.backend.enabled !== false);
   answers.backend.enabled = hasBackend;
   if (hasBackend) {
-    const env = cfg.backend.defaultEnv || 'staging';
-    const currentUrl = (cfg.backend.baseUrls && cfg.backend.baseUrls[env]) || '';
-    const url = await u.askWithDefault(`Base URL for "${env}"`, currentUrl);
-    if (url) answers.backend.baseUrls[env] = url;
     answers.backend.auth.path = await u.askWithDefault('Login path', cfg.backend.auth.path || '/auth/login');
     answers.backend.auth.usernameField = await u.askWithDefault(
       'Username body field',
@@ -667,7 +700,76 @@ async function askQuestions(host, d, cfg) {
     );
   }
 
-  return answers;
+  // One pass per environment. A flavor build points at its own backend and
+  // needs its own test account, so the three are asked for together.
+  u.heading('Step 5 of 5: environments and their QC accounts');
+  const names = envNames(cfg);
+  u.info(`  environments: ${names.join(', ') || '(none detected)'}`);
+  if (names.some((n) => isProtectedName(cfg, n))) {
+    u.info('  a protected environment (prod-like) defaults to no account: a QC run');
+    u.info('  logs in and can write data, which is rarely what you want there.');
+  }
+  u.info('');
+
+  for (const env of names) {
+    const guarded = isProtectedName(cfg, env);
+    u.info(`  ${env}${guarded ? '  (protected)' : ''}`);
+    if (hasBackend) {
+      const url = await u.askWithDefault(
+        `  base URL for ${env}`,
+        (cfg.backend.baseUrls && cfg.backend.baseUrls[env]) || '',
+      );
+      if (url) answers.backend.baseUrls[env] = url;
+    }
+    const known = credentialsKnownFor(host, cfg, env);
+    const wantCreds = await u.confirm(
+      `  set a QC account for ${env}?${known ? ' (one is already set)' : ''}`,
+      !guarded && !known,
+    );
+    if (wantCreds) {
+      const username = await u.askWithDefault('    username', credentialUsername(host, cfg, env));
+      const password = await u.askSecret(
+        `    password (hidden${known ? ', blank keeps the current one' : ''}): `,
+      );
+      if (username) credentials[env] = { username, password };
+    }
+    u.info('');
+  }
+
+  while (await u.confirm('Add another environment?', false)) {
+    const name = await u.askWithDefault('  name (for example uat)', '');
+    if (!name) break;
+    answers.app.flavors = answers.app.flavors || {};
+    answers.app.flavors[name] = {
+      androidPackage: await u.askWithDefault('  android package', ''),
+      iosBundleId: await u.askWithDefault('  ios bundle id', ''),
+    };
+    if (hasBackend) {
+      const url = await u.askWithDefault('  base URL', '');
+      if (url) answers.backend.baseUrls[name] = url;
+    }
+    if (await u.confirm(`  set a QC account for ${name}?`, !isProtectedName(cfg, name))) {
+      const username = await u.askWithDefault('    username', '');
+      const password = await u.askSecret('    password (hidden): ');
+      if (username) credentials[name] = { username, password };
+    }
+  }
+
+  const allNames = [...new Set([...names, ...Object.keys(answers.app.flavors || {})])];
+  if (allNames.length > 1) {
+    const chosen = await u.askWithDefault('Default environment', cfg.app.defaultFlavor || allNames[0]);
+    if (chosen) {
+      answers.app.defaultFlavor = chosen;
+      answers.backend.defaultEnv = chosen;
+    }
+  }
+
+  answers.project.commitReports = await u.confirm(
+    'Keep QC reports in git? (recordings stay ignored either way)',
+    cfg.project.commitReports === true,
+  );
+
+  return { answers, credentials };
 }
 
 // ------------------------------------------------------------------- todos
@@ -751,10 +853,85 @@ After setup
   qc-check run ABC-123`);
 }
 
+// Write the QC accounts collected during setup, plus anything supplied through
+// QC_CRED_<ENV>_* variables. Values are never printed, not even partially.
+function writeCredentials(host, cfg, collected) {
+  const credPath = u.credentialsPathOf(host, cfg);
+  const credRel = path.relative(host, credPath);
+  const asked = Object.keys(collected || {});
+
+  if (fs.existsSync(credPath) && !credFile.isGenerated(credPath)) {
+    u.info(`  kept     ${credRel} (hand-written, not managed by qc-check)`);
+    if (asked.length) {
+      u.warn(
+        `${credRel} is hand-written, so the account(s) you entered were not saved. ` +
+          'Edit that file yourself, or move it aside and re-run setup.',
+      );
+    }
+    return;
+  }
+
+  const data = fs.existsSync(credPath) ? credFile.read(credPath) : {};
+  const touched = [];
+
+  for (const env of asked) {
+    const entry = collected[env] || {};
+    const existing = (data[env] && data[env].password) || '';
+    // A blank password keeps whatever was already there.
+    const password = entry.password || existing;
+    if (!password) {
+      u.warn(`no password entered for ${env}, so no account was saved for it.`);
+      continue;
+    }
+    data[env] = { username: entry.username, password };
+    touched.push(env);
+  }
+
+  for (const env of envNames(cfg)) {
+    const fromEnv = credFile.fromEnvVars(env);
+    if (fromEnv && fromEnv.username && fromEnv.password) {
+      data[env] = fromEnv;
+      if (!touched.includes(env)) touched.push(`${env} (from QC_CRED_* variables)`);
+    }
+  }
+
+  // A placeholder makes the shape discoverable without pretending an account
+  // exists: CHANGE_ME never counts as usable.
+  for (const env of envNames(cfg)) {
+    if (!data[env] && !isProtectedName(cfg, env)) {
+      data[env] = { username: 'CHANGE_ME', password: 'CHANGE_ME' };
+    }
+  }
+
+  credFile.write(credPath, data);
+  const ready = Object.keys(data).filter((e) => data[e].password && data[e].password !== 'CHANGE_ME');
+  u.info(`  wrote    ${credRel} (mode 0600, gitignored)`);
+  u.info(`           accounts set: ${ready.join(', ') || 'none yet'}`);
+  if (touched.length) u.info(`           updated: ${touched.join(', ')}`);
+}
+
+// Keep one marked block in .gitignore, so switching commitReports rewrites it
+// instead of leaving the old rules behind.
+function syncGitignore(host, lines) {
+  const file = path.join(host, '.gitignore');
+  const START = '# >>> qc-check';
+  const END = '# <<< qc-check';
+  let text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+
+  // Drop a previous marked block, and the older unmarked one.
+  text = text.replace(new RegExp(`\\n?${START}[\\s\\S]*?${END}\\n?`, 'g'), '\n');
+  text = text.replace(/\n?# qc-check: evidence and credentials stay local\n(?:[^\n]*\n)*?(?=\n|$)/g, '\n');
+
+  const block = [START, '# Evidence and credentials. Managed by `qc-check setup`.', ...lines, END].join('\n');
+  const sep = text === '' || text.endsWith('\n') ? '' : '\n';
+  fs.writeFileSync(file, `${text}${sep}\n${block}\n`.replace(/\n{3,}/g, '\n\n'));
+}
+
 async function run(args = {}) {
   const host = u.findHost(args);
   if (!fs.existsSync(host)) u.fail(`no such directory: ${host}`);
 
+  let collectedCredentials = {};
   const force = Boolean(args.force);
   const interactive = u.isInteractive() && !args.yes;
 
@@ -794,8 +971,9 @@ async function run(args = {}) {
   }
 
   if (interactive) {
-    const answers = await askQuestions(host, d, cfg);
-    cfg = u.deepMerge(cfg, answers);
+    const asked = await askQuestions(host, d, cfg);
+    cfg = u.deepMerge(cfg, asked.answers);
+    collectedCredentials = asked.credentials;
   } else {
     u.heading('Assumed');
     u.info('  not interactive: taking every detected value and the schema defaults');
@@ -818,23 +996,16 @@ async function run(args = {}) {
   u.writeConfig(host, cfg);
   u.info(`  wrote    ${u.CONFIG_FILE}`);
 
-  const credPath = u.credentialsPathOf(host, cfg);
-  const credRel = path.relative(host, credPath);
-  if (fs.existsSync(credPath)) {
-    u.info(`  kept     ${credRel} (existing credentials left untouched)`);
-  } else {
-    const template = path.join(u.PKG_ROOT, 'runtime', 'credentials.example.js');
-    if (fs.existsSync(template)) {
-      u.copyFile(template, credPath);
-      u.info(`  created  ${credRel} (template, fill it in by hand)`);
-    } else {
-      u.warn(`credentials template missing at ${template}; create ${credRel} by hand`);
-    }
-  }
+  writeCredentials(host, cfg, collectedCredentials);
 
-  const ignored = u.appendGitignore(host, [`${cfg.project.reportsDir}/`, cfg.credentialsFile]);
-  if (ignored.length) u.info(`  ignored  ${ignored.join(', ')}`);
-  else u.info('  ignored  already in .gitignore');
+  const reports = cfg.project.reportsDir || 'qc-reports';
+  // Recordings are large binaries and the active marker is per-machine, so
+  // they stay out of git even when the reports themselves are kept.
+  const ignoreLines = cfg.project.commitReports
+    ? [cfg.credentialsFile, `${reports}/.active.json`, `${reports}/_unsorted/`, `${reports}/**/recordings/`]
+    : [cfg.credentialsFile, `${reports}/`];
+  syncGitignore(host, ignoreLines);
+  u.info(`  ignored  ${ignoreLines.join(', ')}`);
 
   const copied = u.copyDir(path.join(u.PKG_ROOT, 'runtime'), path.join(host, u.RUNTIME_DIR));
   u.info(`  copied   ${copied} runtime file(s) to ${u.RUNTIME_DIR}/`);
@@ -846,10 +1017,17 @@ async function run(args = {}) {
   }
 
   u.heading('Next steps');
-  u.info(`  1. Put the QC test account in ${credRel}. It is gitignored; never commit it.`);
+  const needAccounts = envNames(cfg).filter(
+    (e) => !isProtectedName(cfg, e) && !HAVE_ACCOUNT.includes(credFile.status(u.credentialsPathOf(host, cfg), e)),
+  );
+  u.info(
+    needAccounts.length
+      ? `  1. Add a QC account for: ${needAccounts.join(', ')}   (qc-check env credentials <env>)`
+      : '  1. QC accounts are set. Check them with: qc-check env',
+  );
   u.info(`  2. Review ${u.CONFIG_FILE}${todos.length ? ' and clear the TODOs above' : ''}.`);
   u.info('  3. qc-check doctor        confirm Appium, a device and an agent are ready.');
-  u.info('  4. qc-check run ABC-123   QC one ticket.');
+  u.info('  4. qc-check run ABC-123 --env <env>   QC one ticket.');
   u.info('');
 }
 

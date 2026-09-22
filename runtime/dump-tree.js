@@ -6,7 +6,6 @@
 'use strict';
 
 const fs = require('fs');
-const path = require('path');
 const http = require('http');
 
 const SESSION_FILE = process.env.QC_SESSION_FILE || '/tmp/qc-session.json';
@@ -26,8 +25,9 @@ Usage: node dump-tree.js [--all] [--grep <substring>] [--save [name]]
 Options:
   --all            include elements without a name/text (normally filtered out)
   --grep <text>    only print lines containing the substring (case-insensitive)
-  --save [name]    also write the dump to the reports dir (project.reportsDir)
-                   as tree-<name>-<timestamp>.txt
+  --save [name]    also write the dump to the run's trees/ folder, numbered
+                   in capture order (001-<name>.txt); _unsorted/ when no run
+                   is in progress
   --help           show this help
 
 Requires an active session created by driver.js connect. The Appium host and
@@ -35,6 +35,7 @@ port come from the session record, or from devices.appium in qc.config.json.
 
 Environment:
   QC_SESSION_FILE   session state path (default /tmp/qc-session.json)
+  QC_RUN_DIR        run folder to save into (set by qc-check run)
 `);
 }
 
@@ -157,9 +158,8 @@ function appiumTarget(session) {
   }
 
   if (save) {
-    const ts = new Date().toISOString().replace(/[:.]/g, '-');
-    const slug = saveName.replace(/\s+/g, '-').replace(/[^a-zA-Z0-9-_]/g, '') || 'screen';
-    const file = path.join(config().reportsDir(), `tree-${slug}-${ts}.txt`);
+    // eslint-disable-next-line global-require
+    const file = require('./runs.js').artifactPath('trees', saveName, 'txt');
     fs.writeFileSync(file, `${lines.join('\n')}\n`);
     console.log(`OK: tree saved: ${file}`);
   }

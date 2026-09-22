@@ -51,12 +51,14 @@ device and reports what it saw, which catches a different class of problem:
 | `qc-check run fix <id>` | Loop over a previous run's findings: fix, re-verify, push |
 | `qc-check status [ticket]` | Phases, sub-steps, findings, and where a run resumes |
 | `qc-check report <ticket>` | The finished report and the evidence beside it |
+| `qc-check env` | List environments and manage credentials |
 | `qc-check prompt <ticket>` | Print the prompt instead of running it, for any agent |
 | `qc-check install --agent` | Optional: also expose it as a slash command in your agent |
 
 `run` takes `--dry-run` to show exactly what would be executed, `--headless` to
 run without a human, and `--agent <kind>` to override the configured backend
-for one run.
+for one run. `run`, `status` and `report` accept `--env <name>` to pick an
+environment.
 
 ## The run
 
@@ -93,6 +95,17 @@ Three settings change the shape of a run:
   no backend of its own.
 - `agent.kind: "none"` stops the CLI invoking anything. Use `qc-check prompt`
   and paste into whatever you like.
+
+## Output
+
+Evidence is organized under `project.reportsDir` (default `qc-reports`) by
+ticket and environment. Each run produces a folder with a `summary.json`
+(machine-readable result), `report.md` (human-readable), screenshots, and
+optionally recordings and API traces. Full-app sweeps use `FULL-SWEEP` as the
+ticket. Fix loops use `<TICKET>-FIX`. The `index.md` and `index.json` files
+track every run, newest first. Set `project.commitReports: true` to keep
+reports and screenshots in git, while `.gitignore` protects recordings and
+the active-run file.
 
 ## Agents
 

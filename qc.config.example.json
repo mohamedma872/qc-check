@@ -1,13 +1,14 @@
 {
   "$schema": "./qc.config.schema.json",
-
   "project": {
     "name": "Example App",
     "reportsDir": "qc-reports",
-    "locales": ["en"],
-    "rtlLocales": []
+    "locales": [
+      "en"
+    ],
+    "rtlLocales": [],
+    "commitReports": false
   },
-
   "tracker": {
     "kind": "none",
     "ticketPattern": "[A-Z]+-[0-9]+",
@@ -22,7 +23,6 @@
     "passLabel": "QC-Agent-Pass",
     "blockedLabel": "BE-Blocking"
   },
-
   "agent": {
     "kind": "claude",
     "command": "",
@@ -30,18 +30,16 @@
     "headless": false,
     "timeoutMinutes": 180
   },
-
   "repo": {
     "defaultBranch": "main"
   },
-
   "app": {
     "defaultFlavor": "staging",
     "androidActivity": "com.example.app.MainActivity",
     "envBanner": "",
     "build": {
-      "android": "",
-      "ios": ""
+      "android": "yarn android:{flavor}",
+      "ios": "yarn ios:{flavor}"
     },
     "flavors": {
       "staging": {
@@ -54,7 +52,6 @@
       }
     }
   },
-
   "devices": {
     "android": {
       "enabled": true,
@@ -79,7 +76,6 @@
       "newCommandTimeout": 900
     }
   },
-
   "backend": {
     "enabled": true,
     "defaultEnv": "staging",
@@ -97,9 +93,9 @@
       "extraBody": {}
     },
     "headers": {},
-    "smokePath": "/health"
+    "smokePath": "/health",
+    "protectedEnvs": []
   },
-
   "codeMap": {
     "sourceDir": "src",
     "navigationGlob": "src/navigation/*.tsx",
@@ -114,11 +110,9 @@
     "typecheckCommand": "npx tsc --noEmit --skipLibCheck",
     "testsGitignored": false
   },
-
   "budget": {
     "currency": "USD",
     "runCap": 30
   },
-
   "credentialsFile": "qc.credentials.js"
 }

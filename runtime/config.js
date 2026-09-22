@@ -24,6 +24,8 @@ const DEFAULTS = {
     reportsDir: 'qc-reports',
     locales: ['en'],
     rtlLocales: [],
+    // true keeps reports and screenshots in git; recordings stay ignored either way.
+    commitReports: false,
   },
   tracker: {
     kind: 'none',
@@ -72,6 +74,9 @@ const DEFAULTS = {
     },
     headers: {},
     smokePath: '',
+    // Environments a run may not target without an explicit override. Names
+    // that look like production are protected even when not listed.
+    protectedEnvs: [],
   },
   codeMap: {
     sourceDir: 'src',
@@ -152,7 +157,7 @@ function loadConfig() {
       `QC config not found: no ${CONFIG_FILE} in ${process.cwd()} or any parent directory.`,
       '',
       'Fix it with one of:',
-      '  npx qc-check init            create qc.config.json in this repo',
+      '  qc-check setup               create qc.config.json in this repo',
       `  cp ${EXAMPLE_FILE} ${CONFIG_FILE}   start from the shipped example`,
       '',
       'Run the QC scripts from inside the repo that holds the config.',
@@ -185,6 +190,12 @@ function loadConfig() {
   // without repeating the lookup.
   if (process.env.QC_ENV) {merged.backend.defaultEnv = process.env.QC_ENV;}
   if (process.env.QC_FLAVOR) {merged.app.defaultFlavor = process.env.QC_FLAVOR;}
+  // One switch for a multi-environment project: a flavor build points at its
+  // matching backend, so QC_ENV selects the flavor of the same name unless a
+  // flavor was chosen explicitly.
+  else if (process.env.QC_ENV && merged.app.flavors && merged.app.flavors[process.env.QC_ENV]) {
+    merged.app.defaultFlavor = process.env.QC_ENV;
+  }
 
   Object.defineProperty(merged, 'configPath', {
     value: file,
@@ -381,7 +392,7 @@ function loadCredentials() {
     throw new Error(
       `Credentials file not found: ${file}\n` +
         `  The path comes from "credentialsFile" in ${CONFIG_FILE}. Create it with either:\n` +
-        '    npx qc-check init                                  (copies the template for you)\n' +
+        '    qc-check setup                                     (asks for each environment)\n' +
         `    cp runtime/credentials.example.js ${file}\n` +
         '  Then fill in the QC test account and keep the file out of version control.',
     );
@@ -400,6 +411,102 @@ function loadCredentials() {
   return redactInPlace(creds);
 }
 
+// --- Environments --------------------------------------------------------------
+
+const PROD_LIKE = /^(prod|production|live|release)$/i;
+
+// Every environment the project knows about: flavors and backend URLs share
+// names, so the union is the list, flavors first in their declared order.
+function environments() {
+  const cfg = loadConfig();
+  const names = [];
+  for (const n of Object.keys(cfg.app.flavors || {})) if (!names.includes(n)) names.push(n);
+  for (const n of Object.keys(cfg.backend.baseUrls || {})) if (!names.includes(n)) names.push(n);
+  return names.map(name => {
+    const f = (cfg.app.flavors || {})[name] || {};
+    return {
+      name,
+      androidPackage: f.androidPackage || '',
+      iosBundleId: f.iosBundleId || '',
+      baseUrl: (cfg.backend.baseUrls || {})[name] || '',
+      protected: isProtectedEnv(name),
+    };
+  });
+}
+
+// The environment this invocation targets.
+function activeEnv() {
+  const cfg = loadConfig();
+  return process.env.QC_ENV || cfg.backend.defaultEnv || cfg.app.defaultFlavor || 'default';
+}
+
+function isProtectedEnv(name) {
+  const cfg = loadConfig();
+  const listed = (cfg.backend.protectedEnvs || []).map(n => String(n).toLowerCase());
+  return listed.includes(String(name).toLowerCase()) || PROD_LIKE.test(String(name));
+}
+
+// --- Credentials per environment ---------------------------------------------
+
+// QC_CRED_<ENV>_USERNAME / _PASSWORD, with the name upper-cased and anything
+// that is not a letter or digit turned into an underscore.
+function envVarNames(env) {
+  const key = String(env).toUpperCase().replace(/[^A-Z0-9]/g, '_');
+  return { user: `QC_CRED_${key}_USERNAME`, pass: `QC_CRED_${key}_PASSWORD` };
+}
+
+function usable(v) {
+  return typeof v === 'string' && v !== '' && v !== 'CHANGE_ME';
+}
+
+// Where the account for an environment would come from, without reading or
+// returning any value. Safe to print.
+function credentialStatus(env) {
+  const names = envVarNames(env);
+  if (usable(process.env[names.user]) && usable(process.env[names.pass])) return 'env';
+  const file = credentialsPath();
+  if (!fs.existsSync(file)) return 'missing';
+  try {
+    const creds = loadCredentials();
+    const block = creds[env];
+    if (block && usable(block.username) && usable(block.password)) return 'file';
+    if (block) return 'incomplete';
+  } catch (_) {
+    return 'unreadable';
+  }
+  return 'missing';
+}
+
+// The account for one environment. Environment variables win, so CI can run
+// with no credentials file at all. The returned object is redacted: it prints
+// as "[credentials redacted]" through console.log and JSON.stringify.
+function credentialsFor(env = activeEnv()) {
+  const names = envVarNames(env);
+  if (usable(process.env[names.user]) && usable(process.env[names.pass])) {
+    return redactInPlace({ username: process.env[names.user], password: process.env[names.pass] });
+  }
+
+  const file = credentialsPath();
+  if (!fs.existsSync(file)) {
+    throw new Error(
+      `No credentials for environment "${env}".\n` +
+        `  Set them with:   qc-check env credentials ${env}\n` +
+        `  or export ${names.user} and ${names.pass}.`,
+    );
+  }
+  const creds = loadCredentials();
+  const block = creds[env];
+  if (!block || !usable(block.username) || !usable(block.password)) {
+    const have = Object.keys(creds).filter(k => isPlainObject(creds[k])).join(', ') || 'none';
+    throw new Error(
+      `No usable credentials for environment "${env}" in ${path.basename(file)} (environments present: ${have}).\n` +
+        `  Set them with:   qc-check env credentials ${env}\n` +
+        `  or export ${names.user} and ${names.pass}.`,
+    );
+  }
+  return redactInPlace({ username: block.username, password: block.password });
+}
+
 module.exports = {
   loadConfig,
   findRepoRoot,
@@ -412,6 +519,13 @@ module.exports = {
   deviceProfiles,
   credentialsPath,
   CONFIG_FILE,
+  // Multi-environment support.
+  environments,
+  activeEnv,
+  isProtectedEnv,
+  credentialsFor,
+  credentialStatus,
+  envVarNames,
 };
 
 // --- CLI ---------------------------------------------------------------------

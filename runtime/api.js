@@ -3,9 +3,10 @@
 //
 // Nothing about any particular backend lives here: base URLs, constant
 // headers, the login shape, the health path and the smoke path all come from
-// `backend` in qc.config.json. The account comes from the gitignored
-// credentials file named by `credentialsFile`. Credentials never appear on the
-// command line and never reach the output.
+// `backend` in qc.config.json. The account for the environment comes from
+// QC_CRED_<ENV>_USERNAME/_PASSWORD or the gitignored credentials file
+// (config.credentialsFor). Credentials never appear on the command line and
+// never reach the output or a saved file.
 //
 // Usage:
 //   node runtime/api.js --health                     # probe the gateway 3x, unauthenticated
@@ -23,6 +24,7 @@
 //   --unauth         skip login (route-existence probes: 401 means the route is deployed)
 //   --reveal         with --token only: print the token unmasked (never do this into a report)
 //   --timeout <ms>   per-request timeout (default 20000)
+//   --save <name>    also write the response, redacted, to the run's api/ folder
 //
 // Exit codes: 0 ok | 1 usage/config/network | 2 auth failed | 3 gateway down | 4 HTTP >= 400
 'use strict';
@@ -51,10 +53,16 @@ const HELP = [
   '  --unauth          skip login (401 on a probe still proves the route is deployed)',
   '  --reveal          print the full token with --token (unsafe for logs and reports)',
   '  --timeout <ms>    per-request timeout, default 20000',
+  '  --save <name>     with GET/POST/PUT/PATCH/DELETE, --smoke or --health: write the',
+  '                    response to the run\'s api/ folder (001-<name>.json) as',
+  '                    { request: { method, path, env }, status, headers, body },',
+  '                    with the token, credentials and session headers masked.',
+  '                    Request bodies and login responses are never saved.',
   '  --help            this text',
   '',
   'Config: backend.{baseUrls,healthPath,auth,headers,smokePath} in qc.config.json.',
-  'Credentials: the gitignored file named by credentialsFile (never printed).',
+  'Credentials: QC_CRED_<ENV>_USERNAME/_PASSWORD, else the gitignored file named by',
+  'credentialsFile (set with `qc-check env credentials <env>`; never printed).',
   'Exit codes: 0 ok | 1 usage/config/network | 2 auth failed | 3 gateway down | 4 HTTP >= 400',
 ].join('\n');
 
@@ -68,7 +76,7 @@ if (!args.length) {
   process.exit(1);
 }
 
-const { loadConfig, loadCredentials } = require('./config.js');
+const { loadConfig, credentialsFor } = require('./config.js');
 
 const cfg = loadConfig();
 const backend = cfg.backend || {};
@@ -100,7 +108,13 @@ const TIMEOUT_MS = Number(flagValue('--timeout')) > 0 ? Number(flagValue('--time
 // an echoing error body or a verbose gateway can never leak them into a report.
 const SECRETS = new Set();
 function remember(value) {
-  if (typeof value === 'string' && value.length >= 4) { SECRETS.add(value); }
+  if (typeof value === 'string' && value.length >= 4) {
+    SECRETS.add(value);
+    // The JSON-escaped form too: a value with a quote or backslash appears
+    // escaped inside a response body or a saved file.
+    const escaped = JSON.stringify(value).slice(1, -1);
+    if (escaped !== value) { SECRETS.add(escaped); }
+  }
 }
 function redact(text) {
   let out = String(text);
@@ -243,26 +257,17 @@ function sessionHeaders(res) {
 function credentialBlock() {
   let creds;
   try {
-    creds = loadCredentials() || {};
+    // --env flows through here too: the account belongs to the environment
+    // the request goes to, never to whatever QC_ENV happens to say.
+    creds = credentialsFor(ENV);
   } catch (err) {
-    // The loader's message names the file and the config key, never a value.
+    // config.js names the setup command and the env vars, never a value.
     console.error(err && err.message ? err.message : String(err));
     process.exit(1);
   }
-  const block = creds[ENV] || (creds.username ? creds : null);
-  const blocks = Object.keys(creds).filter(k => k !== 'env').join(', ') || '(none)';
-  const file = cfg.credentialsFile || 'qc.credentials.js';
-  if (!block || !block.username || !block.password) {
-    console.error(`no credentials for env "${ENV}" in ${file} - blocks present: ${blocks}`);
-    process.exit(1);
-  }
-  if (block.username === 'CHANGE_ME' || block.password === 'CHANGE_ME') {
-    console.error(`${file} still has CHANGE_ME for env "${ENV}" - fill in the QC test account`);
-    process.exit(1);
-  }
-  remember(block.username);
-  remember(block.password);
-  return block;
+  remember(creds.username);
+  remember(creds.password);
+  return creds;
 }
 
 async function login() {
@@ -299,7 +304,9 @@ async function login() {
     process.exit(2);
   }
   remember(token);
-  return { token, headers: sessionHeaders(res) };
+  const extra = sessionHeaders(res);
+  for (const v of Object.values(extra)) { remember(String(v)); }
+  return { token, headers: extra };
 }
 
 // Classify one probe. A status below 500 is only proof of life when the API
@@ -310,6 +317,7 @@ async function login() {
 async function healthProbe() {
   try {
     const { status, headers, raw } = await request('GET', backend.healthPath || '/health', null, null);
+    lastProbe = { status, headers, raw };
     const type = String((headers && headers['content-type']) || '').toLowerCase();
     const html = type.includes('text/html') || /^\s*<(!doctype|html)/i.test(String(raw || ''));
     let verdict;
@@ -319,7 +327,85 @@ async function healthProbe() {
     else verdict = 'down';
     return { status, verdict };
   } catch {
+    lastProbe = null;
     return { status: 0, verdict: 'down' };
+  }
+}
+let lastProbe = null;
+
+// --- --save --------------------------------------------------------------------
+
+const SAVE_NAME = flagValue('--save');
+if (args.includes('--save') && (!SAVE_NAME || SAVE_NAME.startsWith('--'))) {
+  console.error('--save needs a name, e.g. --save profile-get');
+  process.exit(1);
+}
+
+// Header names whose values authenticate a caller. Their values are dropped
+// from a saved file whatever the gateway sends back.
+const SENSITIVE_HEADER = /^(authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token|x-access-token|x-refresh-token|x-csrf-token|x-xsrf-token)$/i;
+// Body keys that commonly carry a secret, masked even when this run never saw
+// the value (a refresh token, a second session id).
+const SENSITIVE_KEY = /(pass(word)?|secret|token|authorization|cookie|api[-_]?key|otp)/i;
+
+function sensitiveHeaderNames() {
+  const names = new Set(Object.keys(authCfg.sessionHeaders || {}).map(n => n.toLowerCase()));
+  const all = [authCfg.tokenPath, ...Object.values(authCfg.sessionHeaders || {})];
+  for (const p of all) {
+    if (typeof p === 'string' && /^headers\./i.test(p)) { names.add(p.slice('headers.'.length).toLowerCase()); }
+  }
+  return names;
+}
+
+function maskKeys(value, depth) {
+  const d = depth || 0;
+  if (d > 20 || value === null || typeof value !== 'object') { return value; }
+  if (Array.isArray(value)) { return value.map(v => maskKeys(v, d + 1)); }
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    out[k] = SENSITIVE_KEY.test(k) && v !== null && typeof v !== 'object' ? '***' : maskKeys(v, d + 1);
+  }
+  return out;
+}
+
+function pathOnly(p) {
+  return String(p || '').split('?')[0].replace(/\/+$/, '');
+}
+
+// Writes { request, status, headers, body } to the run's api/ folder. Only the
+// method, path and environment of the request are recorded, never its body,
+// so a credential sent in a request can never end up on disk. A failure to
+// save warns and leaves the exit code alone.
+function saveResponse(method, urlPath, res, extra) {
+  if (!SAVE_NAME || !res) { return; }
+  if (authCfg.path && pathOnly(urlPath) === pathOnly(authCfg.path)) {
+    console.error('WARN: not saving a login response (it carries the session token). Nothing written.');
+    return;
+  }
+  try {
+    const drop = sensitiveHeaderNames();
+    const headers = {};
+    for (const [k, v] of Object.entries(res.headers || {})) {
+      headers[k] = SENSITIVE_HEADER.test(k) || drop.has(k.toLowerCase()) ? '***' : v;
+    }
+    const text = redact(res.raw == null ? '' : res.raw);
+    let body;
+    try { body = maskKeys(JSON.parse(text)); } catch { body = text; }
+    const record = {
+      request: { method, path: redact(urlPath), env: ENV },
+      status: res.status,
+      headers,
+      body,
+      ...(extra || {}),
+    };
+    // Last pass over the serialised file: nothing this run learned may survive.
+    const out = `${redact(JSON.stringify(record, null, 2))}\n`;
+    // eslint-disable-next-line global-require
+    const file = require('./runs.js').artifactPath('api', SAVE_NAME, 'json');
+    fs.writeFileSync(file, out);
+    console.error(`OK: response saved: ${file}`);
+  } catch (err) {
+    console.error(`WARN: response not saved: ${redact(err && err.message ? err.message : String(err))}`);
   }
 }
 
@@ -340,14 +426,19 @@ function printBody(raw) {
   if (args.includes('--health')) {
     let up = false;
     let blocked = false;
+    const probes = [];
     for (let i = 1; i <= 3; i++) {
       const { status, verdict } = await healthProbe();
+      probes.push({ status, verdict });
       const note = verdict === 'blocked' ? ' (HTML from an edge proxy, not the API)' : '';
       console.log(`${ENV} gateway probe ${i}/3: HTTP ${status || 'timeout/unreachable'}${note}`);
       if (verdict === 'up') { up = true; }
       if (verdict === 'blocked') { blocked = true; }
       if (i < 3) { await new Promise(r => setTimeout(r, 3000)); }
     }
+    const healthPath = backend.healthPath || '/health';
+    const verdict = up ? 'UP' : blocked ? 'BLOCKED' : 'DOWN';
+    saveResponse('GET', healthPath, lastProbe || { status: 0, headers: {}, raw: '' }, { verdict, probes });
     if (up) {
       console.log(`OK: ${ENV} gateway is UP`);
       process.exit(0);
@@ -370,9 +461,11 @@ function printBody(raw) {
   if (args.includes('--smoke')) {
     const smokePath = backend.smokePath || backend.healthPath || '/health';
     const auth = await login();
-    const { status, raw } = await request('GET', smokePath, null, auth);
+    const res = await request('GET', smokePath, null, auth);
+    const { status, raw } = res;
     console.log(`smoke: GET ${smokePath} -> HTTP ${status} (authenticated)`);
     printBody(raw);
+    saveResponse('GET', smokePath, res);
     process.exit(status >= 400 ? 4 : 0);
   }
 
@@ -380,7 +473,7 @@ function printBody(raw) {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a.startsWith('--')) {
-      if (['--env', '--data', '--lang', '--timeout'].includes(a)) { i++; }
+      if (['--env', '--data', '--lang', '--timeout', '--save'].includes(a)) { i++; }
       continue;
     }
     positional.push(a);
@@ -388,13 +481,15 @@ function printBody(raw) {
   const method = (positional[0] || '').toUpperCase();
   const urlPath = positional[1];
   if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method) || !urlPath || !urlPath.startsWith('/')) {
-    console.error("Usage: api.js [--health|--smoke|--token] | <GET|POST|PUT|PATCH|DELETE> </path> [--data '<json>'] [--unauth] [--raw] [--lang ar] [--env production]");
+    console.error("Usage: api.js [--health|--smoke|--token] | <GET|POST|PUT|PATCH|DELETE> </path> [--data '<json>'] [--unauth] [--raw] [--lang ar] [--env production] [--save <name>]");
     process.exit(1);
   }
 
   const auth = args.includes('--unauth') ? null : await login();
-  const { status, raw } = await request(method, urlPath, flagValue('--data'), auth);
+  const res = await request(method, urlPath, flagValue('--data'), auth);
+  const { status, raw } = res;
   printBody(raw);
+  saveResponse(method, urlPath, res);
   console.error(`HTTP ${status}`);
   if (status >= 400) { process.exit(4); }
 })().catch(err => {

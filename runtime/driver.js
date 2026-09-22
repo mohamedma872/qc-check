@@ -7,7 +7,6 @@
 'use strict';
 
 const fs = require('fs');
-const path = require('path');
 const http = require('http');
 
 const SESSION_FILE = process.env.QC_SESSION_FILE || '/tmp/qc-session.json';
@@ -388,7 +387,6 @@ async function cmdAssertNotVisible({ selector, text, within }) {
 
 async function cmdScreenshot({ name }) {
   const { sessionId } = loadSession();
-  const dir = config().reportsDir();
 
   const res = await appiumRequest('GET', `/session/${sessionId}/screenshot`);
   // A dead/invalid session returns an error object in `value`, not a base64 string.
@@ -399,11 +397,14 @@ async function cmdScreenshot({ name }) {
     process.exit(1);
   }
 
-  const ts = new Date().toISOString().replace(/[:.]/g, '-');
-  const slug = (typeof name === 'string' ? name : 'screenshot')
-    .replace(/\s+/g, '-')
-    .replace(/[^a-zA-Z0-9-_]/g, '');
-  const filepath = path.join(dir, `${slug || 'screenshot'}-${ts}.png`);
+  // Numbered in capture order inside the run in progress (runs.js), or
+  // _unsorted/ with a warning when no run is active.
+  // eslint-disable-next-line global-require
+  const filepath = require('./runs.js').artifactPath(
+    'screenshots',
+    typeof name === 'string' ? name : 'screenshot',
+    'png',
+  );
   const png = Buffer.from(res.value, 'base64');
   fs.writeFileSync(filepath, png);
   console.log(`OK: screenshot saved: ${filepath}`);
@@ -427,46 +428,43 @@ async function cmdScreenshot({ name }) {
 // to the caller and never logged, never placed in an error message and never
 // passed on a command line: this is what keeps the agent out of the loop.
 function credentialValue(field) {
-  const { loadConfig, loadCredentials } = config();
-  const cfg = loadConfig();
-  const file = cfg.credentialsFile || 'qc.credentials.js';
+  const { activeEnv, credentialsFor, envVarNames, loadCredentials } = config();
+  const env = activeEnv();
 
   let creds;
   try {
-    creds = loadCredentials();
+    // Env vars first, then the credentials file block (config.js).
+    creds = credentialsFor(env);
   } catch (err) {
-    // The loader's message names the file and the config key, never a value.
+    // config.js names the setup command and the env vars, never a value.
+    const names = envVarNames(env);
     console.error(`ERROR: ${err.message || err}`);
+    if (!/qc-check env credentials/.test(String(err.message))) {
+      console.error(`   Set them with: qc-check env credentials ${env}`);
+      console.error(`   or export ${names.user} and ${names.pass}.`);
+    }
     process.exit(1);
   }
 
-  // QC_ENV wins over the file's own `env`; a flat file with no env blocks is
-  // accepted as its own block, matching how api.js resolves credentials.
-  const envName = process.env.QC_ENV || creds.env || cfg.backend.defaultEnv || '';
-  const block = creds[envName] || (creds.username ? creds : null);
-  if (!block) {
-    const blocks = Object.keys(creds).filter(k => k !== 'env').join(', ') || '(none)';
-    console.error(
-      `ERROR: no credentials for env "${envName}" in ${file} - blocks present: ${blocks}`,
-    );
-    console.error('   Set the env with QC_ENV, or with "env" in the credentials file.');
-    process.exit(1);
-  }
+  if (field === 'username' || field === 'password') {return creds[field];}
 
-  const value = block[field];
-  if (typeof value !== 'string' || !value) {
-    const fields = Object.keys(block).join(', ') || '(none)';
-    console.error(
-      `ERROR: credential field "${field}" is missing for env "${envName}" in ${file} ` +
-        `(the path comes from "credentialsFile" in qc.config.json) - fields present: ${fields}`,
-    );
-    process.exit(1);
+  // Any other field (a PIN, a second factor seed) can only come from the
+  // environment's block in a hand-written credentials file.
+  let block = null;
+  try {
+    block = (loadCredentials() || {})[env] || null;
+  } catch {
+    block = null;
   }
-  if (value === 'CHANGE_ME') {
+  const value = block ? block[field] : undefined;
+  if (typeof value !== 'string' || !value || value === 'CHANGE_ME') {
+    const fields = ['username', 'password', ...Object.keys(block || {}).filter(
+      k => k !== 'username' && k !== 'password',
+    )].join(', ');
     console.error(
-      `ERROR: ${file} still has the placeholder for "${field}" in env "${envName}" - ` +
-        'fill in the QC test account.',
+      `ERROR: credential field "${field}" is not set for environment "${env}" - fields available: ${fields}.`,
     );
+    console.error(`   Set credentials with: qc-check env credentials ${env}`);
     process.exit(1);
   }
   return value;
@@ -621,12 +619,13 @@ Commands:
                       --duration <ms>             Hold time (default 1000ms)
   assert-visible      --selector/--text <val>     Fail if element not on screen
   assert-not-visible  --selector/--text <val>     Fail if element IS on screen
-  screenshot          --name <label>              Save PNG to the reports dir (project.reportsDir)
+  screenshot          --name <label>              Save PNG to the run's screenshots/ folder,
+                                                  numbered in capture order (001-<label>.png)
   input               --selector <testID>         Type into a field
                       --text "value"              Type a literal value
-                      --credential <field>        Type a field from the credentials file
-                                                  (username | password | any field in the
-                                                  block for the active environment). The
+                      --credential <field>        Type a credential of the active environment
+                                                  (username | password; from QC_CRED_<ENV>_*
+                                                  env vars or the credentials file). The
                                                   value never appears on a command line,
                                                   in the log or in an error message.
                                                   Mutually exclusive with --text.
@@ -647,12 +646,15 @@ Selector tips:
 Configuration:
   qc.config.json in the host repo supplies the device profiles, app packages,
   Appium host/port and the reports directory. Run this script from anywhere
-  inside that repo. Credentials live in the gitignored file named by
-  "credentialsFile" and are read only by --credential, never by the agent.
+  inside that repo. Credentials come from QC_CRED_<ENV>_USERNAME/_PASSWORD or
+  the gitignored file named by "credentialsFile" (set them with
+  qc-check env credentials <env>) and are read only by --credential, never by
+  the agent.
 
 Environment:
-  QC_ENV            credentials environment for --credential (overrides the
-                    credentials file's own "env")
+  QC_ENV            environment under test: selects the credentials used by
+                    --credential and the run folder evidence is saved to
+  QC_RUN_DIR        run folder to save evidence into (set by qc-check run)
   QC_FLAVOR         default app flavor
   QC_SESSION_FILE   session state path (default /tmp/qc-session.json)
   QC_EVAL           marks a headless eval run

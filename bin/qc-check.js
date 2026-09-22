@@ -14,6 +14,7 @@ const { parseArgs, info, fail, pkgVersion } = require('../cli/util');
 const COMMANDS = {
   setup: { file: '../cli/setup', blurb: 'configure this repository for QC (run this first)' },
   doctor: { file: '../cli/doctor', blurb: 'check the environment and configuration' },
+  env: { file: '../cli/env', blurb: 'environments: list, add, switch, set credentials' },
   run: { file: '../cli/run', blurb: 'run a QC pass: a ticket, "all", or "fix <run-id>"' },
   prompt: { file: '../cli/prompt', blurb: 'print the QC prompt instead of running it' },
   status: { file: '../cli/status', blurb: 'show the state of a run, resumable at any point' },
@@ -37,6 +38,7 @@ Getting started
   cd /path/to/your/app
   qc-check setup                 detect the project and write qc.config.json
   qc-check doctor                confirm Appium, a device and an agent are ready
+  qc-check env                   environments and which have credentials
   qc-check run ABC-123           QC one ticket
   qc-check run all               sweep every screen
   qc-check run fix ABC-123       fix what the last run found

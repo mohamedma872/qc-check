@@ -203,12 +203,82 @@ try {
     assert(/status|run/i.test(r.out), 'should suggest what to do next');
   });
 
-  check('report prints a finished report', () => {
-    const cfg = JSON.parse(fs.readFileSync(path.join(host, 'qc.config.json'), 'utf8'));
-    const file = path.join(host, cfg.project.reportsDir, 'ABC-123-report.md');
-    fs.writeFileSync(file, '# ABC-123\n\n## Overall: PASS\n');
+  check('report prints a finished report from the run folder', () => {
+    const dir = run([path.join(host, 'qc', 'runs.js'), 'open', 'ABC-123'], { cwd: host }).trim();
+    assert(dir && fs.existsSync(dir), `run folder not created: ${dir}`);
+    fs.writeFileSync(path.join(dir, 'report.md'), '# ABC-123\n\n## Overall: PASS\n');
     const out = run([CLI, 'report', 'ABC-123', '--dir', host]);
     assert(/Overall: PASS/.test(out), 'report body not printed');
+    const summary = JSON.parse(run([CLI, 'report', 'ABC-123', '--dir', host, '--json']));
+    assert(summary.verdict === 'PASS', `summary.json verdict wrong: ${summary.verdict}`);
+    assert(summary.ticket === 'ABC-123' && summary.environment, 'summary.json missing identity');
+  });
+
+  check('evidence is filed per ticket, environment and run', () => {
+    const cfg = JSON.parse(fs.readFileSync(path.join(host, 'qc.config.json'), 'utf8'));
+    const base = path.join(host, cfg.project.reportsDir);
+    const env = cfg.backend.defaultEnv || cfg.app.defaultFlavor;
+    const ticketDir = path.join(base, 'ABC-123', env);
+    assert(fs.existsSync(ticketDir), `no ${ticketDir}`);
+    const runs = fs.readdirSync(ticketDir).filter((f) => f !== 'current');
+    assert(runs.length >= 1, 'no run folder');
+    const dir = path.join(ticketDir, runs[0]);
+    for (const sub of ['screenshots', 'recordings', 'trees', 'api']) {
+      assert(fs.existsSync(path.join(dir, sub)), `missing ${sub}/`);
+    }
+    assert(fs.existsSync(path.join(base, 'index.md')), 'index.md not written');
+    assert(fs.existsSync(path.join(base, 'index.json')), 'index.json not written');
+  });
+
+  check('artifacts are numbered inside the run', () => {
+    const p = run([path.join(host, 'qc', 'runs.js'), 'path', 'screenshots', 'login', 'png'], {
+      cwd: host,
+    }).trim();
+    assert(/screenshots\/001-login\.png$/.test(p), `unexpected artifact path: ${p}`);
+  });
+
+  check('a second environment gets its own run folder', () => {
+    const cfg = JSON.parse(fs.readFileSync(path.join(host, 'qc.config.json'), 'utf8'));
+    cfg.app.flavors.uat = { androidPackage: 'com.example.app.uat', iosBundleId: '' };
+    cfg.backend.baseUrls.uat = 'https://api.example.com';
+    fs.writeFileSync(path.join(host, 'qc.config.json'), JSON.stringify(cfg, null, 2));
+    run([path.join(host, 'qc', 'runs.js'), 'open', 'ABC-123', '--env', 'uat'], { cwd: host });
+    const base = path.join(host, cfg.project.reportsDir);
+    assert(fs.existsSync(path.join(base, 'ABC-123', 'uat')), 'uat run folder missing');
+  });
+
+  check('env lists environments and their credential status', () => {
+    const out = run([CLI, 'env', '--dir', host]);
+    assert(/uat/.test(out), 'uat not listed');
+    assert(/credentials/i.test(out), 'no credentials column');
+    assert(!/CHANGE_ME.*password|password.*=/.test(out), 'env list looks like it printed a value');
+  });
+
+  check('credentials come from QC_CRED_* variables', () => {
+    const out = run([CLI, 'env', '--dir', host], {
+      env: { ...process.env, QC_CRED_UAT_USERNAME: 'qa', QC_CRED_UAT_PASSWORD: 'pw-should-not-appear' },
+    });
+    assert(!/pw-should-not-appear/.test(out), 'a credential value reached stdout');
+    assert(/env/.test(out), 'env-var credentials not reported');
+  });
+
+  check('a protected environment is refused without the flag', () => {
+    const cfg = JSON.parse(fs.readFileSync(path.join(host, 'qc.config.json'), 'utf8'));
+    cfg.app.flavors.prod = { androidPackage: 'com.example.app', iosBundleId: '' };
+    fs.writeFileSync(path.join(host, 'qc.config.json'), JSON.stringify(cfg, null, 2));
+    const refused = runSoft([CLI, 'run', 'ABC-123', '--dir', host, '--env', 'prod', '--dry-run']);
+    assert(refused.status !== 0, 'prod should be refused');
+    assert(/allow-protected/.test(refused.out), 'the refusal should name the override');
+    const allowed = runSoft([
+      CLI, 'run', 'ABC-123', '--dir', host, '--env', 'prod', '--dry-run', '--allow-protected',
+    ]);
+    assert(allowed.status === 0, `--allow-protected should proceed: ${allowed.out.slice(0, 160)}`);
+  });
+
+  check('an unknown environment fails with the known list', () => {
+    const r = runSoft([CLI, 'run', 'ABC-123', '--dir', host, '--env', 'nope', '--dry-run']);
+    assert(r.status !== 0, 'unknown environment should fail');
+    assert(/uat/.test(r.out), 'the error should list the known environments');
   });
 
   check('install --agent wires up a slash command', () => {

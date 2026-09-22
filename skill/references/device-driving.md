@@ -8,9 +8,10 @@ Conventions used in this file:
 | Placeholder | Comes from |
 |-------------|-----------|
 | `qc/` | where the installer put the runtime inside the host repo |
-| `<reportsDir>/` | `config.project.reportsDir` (default `qc-reports`) |
+| `<run>/` | this run's folder: in your prompt, in `$QC_RUN_DIR`, printed by `node qc/runs.js current` |
 | `ABC-123` | the ticket id |
-| `<flavor>` | `QC_FLAVOR`, else `config.app.defaultFlavor` |
+| `<env>` | the run's environment, `QC_ENV`. It does not change during the run |
+| `<flavor>` | `QC_FLAVOR`, else the flavor named `<env>`, else `config.app.defaultFlavor` |
 | `<pkg>` | `config.app.flavors[<flavor>].androidPackage` |
 
 ## Platforms
@@ -27,7 +28,7 @@ platform to run: assume phone only unless the user says otherwise.
 Run each form factor as its **own pass** (connect -> record -> cases -> stop
 recording -> disconnect) with its own entry in your visible task list and its own
 state entry. **Before starting the pass, plan its sub-steps**, one `case-N` per
-TC in the approved test plan (`<reportsDir>/ABC-123-plan.md`; the numbering must
+TC in the approved test plan (`<run>/plan.md`; the numbering must
 match):
 
 ```bash
@@ -50,8 +51,9 @@ the progress board the user reviews.
 ## Build and install first
 
 **The app must be built and installed on each target device before the pass**,
-in the flavor the QC run targets (`<flavor>`). The command comes from the
-config:
+in the flavor the QC run targets (`<flavor>`, which follows `<env>`). The
+command comes from the config, and a `{flavor}` in it is replaced with
+`<flavor>` (for example `yarn android:{flavor}` becomes `yarn android:uat`):
 
 | Target | Key |
 |--------|-----|
@@ -94,6 +96,8 @@ file -> base URL). Most apps have no in-app environment switcher: if the app
 hits the wrong backend, it is the wrong flavor build, so reinstall rather than
 hunting for a hidden settings screen. `qc/api.js` (host side) and the installed
 build must target the same environment (`config.backend.baseUrls[<env>]`).
+Fix a mismatch by installing the `<env>` build, never by changing `QC_ENV`
+mid-run.
 
 ## Pre-flight per pass
 
@@ -148,22 +152,24 @@ flavor is installed.
 node qc/driver.js assert-visible --text "<config.app.envBanner>"
 ```
 
-`ASSERT FAILED - not visible` here means the wrong flavor build. Reinstall (see
-the build note above) instead of continuing: results from a build pointed at
-another environment prove nothing.
+`ASSERT FAILED - not visible` here means the wrong flavor build, that is, not
+the `<env>` build. Reinstall (see the build note above) instead of continuing:
+results from a build pointed at another environment prove nothing.
 
 When `config.app.envBanner` is empty, verify the environment the slower way:
 perform one read in the app and confirm the same data comes back from
 `node qc/api.js GET <the-screen-endpoint>` against
 `config.backend.baseUrls[<env>]`.
 
-### Login (credentials from `config.credentialsFile`, never hardcoded)
+### Login (the `<env>` account, typed by the driver, never seen by you)
 
 The login request is `config.backend.auth.method` on
 `config.backend.auth.path`; the two fields on screen carry
 `config.backend.auth.usernameField` and `config.backend.auth.passwordField`.
-Credentials live in `config.credentialsFile` at the host repo root, which is
-gitignored. Never echo a credential value into the transcript, a screenshot
+Each environment has its own QC account, kept in the gitignored
+`config.credentialsFile` or in `QC_CRED_<ENV>_USERNAME` / `_PASSWORD`. You never
+read either: do not open, `cat` or `require` the file, and do not echo the
+variables. Never put a credential value into the transcript, a screenshot
 caption, a report, or a ticket.
 
 Selectors drift, so **dump the tree before you trust one**:
@@ -185,22 +191,22 @@ Common realities worth checking rather than assuming:
 - Some builds ship a dev-only panel that clears stored tokens. If this one does,
   use it when a pass needs a fresh logged-out state instead of reinstalling.
 
-A working shape for the typed login, with the values read from the credentials
-file and never printed:
+A working shape for the typed login. `--credential` types the `<env>` account
+straight into the field; the value never appears on a command line or in the
+output:
 
 ```bash
-USER=$(node -p "const c=require('./qc.credentials.js'); c[c.env].username")
-PASS=$(node -p "const c=require('./qc.credentials.js'); c[c.env].password")
-node qc/driver.js input --selector "~Input Field" --text "$USER"
-node qc/driver.js tap --x <px> --y <py>       # password field center from dump-tree
-adb shell input text "$PASS"                   # types into the focused field
+node qc/driver.js input --selector "~Input Field" --index 0 --credential username
+node qc/driver.js input --selector "~Input Field" --index 1 --credential password   # second field sharing the label
 node qc/driver.js tap --selector "~Log in"
 sleep 5
 node qc/driver.js screenshot --name "after-login"
 ```
 
-(Use the path in `config.credentialsFile`; the example above is the default
-`qc.credentials.js`.)
+Use real testIDs when the fields have them. `--index` picks the nth match when
+two fields share one label. If the driver says there are no credentials for
+`<env>`, stop and ask the user to run `qc-check env credentials <env>`. Do not
+type a value you got any other way.
 
 - **5xx here** means the backend is erroring: re-check `node qc/api.js --health`.
 - **"Network request failed"** means a wrong or unreachable host, which is almost
@@ -295,9 +301,12 @@ disconnecting:
 ```bash
 qc/record.sh start 1800
 # ... test cases ...
-qc/record.sh stop <reportsDir>/ABC-123-phone.mp4    # or -tablet.mp4 / -ios.mp4
+qc/record.sh stop phone       # or tablet / ios; saved as <run>/recordings/NNN-phone.mp4
 node qc/driver.js disconnect
 ```
+
+Pass a bare name, never a path. The script numbers the file and prints where it
+went.
 
 Recording is flaky on headless emulators; `record.sh stop` says so if the file
 is empty. Fall back to screenshots and note it. **Never block QC on video.**
@@ -314,12 +323,19 @@ node qc/driver.js input --selector "~id" --text "value"
 node qc/driver.js assert-visible --selector "~id"      # non-zero exit + "ASSERT FAILED - ..." = FAIL
 node qc/driver.js assert-not-visible --text "Error"
 node qc/driver.js swipe --direction up
-node qc/driver.js screenshot --name "step"
+node qc/driver.js screenshot --name "tc2-saved"   # <run>/screenshots/NNN-tc2-saved.png
 node qc/driver.js find --text "Label"
+node qc/dump-tree.js --save "tc2-form"            # <run>/trees/NNN-tc2-form.txt
 ```
 
-Screenshots land in `<reportsDir>/`, which is what the report's Evidence column
-points at.
+Screenshots land in `<run>/screenshots/`, numbered in capture order, and the
+driver prints each path. That path, relative to `<run>/`, is what the report's
+Evidence column cites. Name captures after the case (`tc2-...`) so the report is
+easy to assemble. Never write evidence to a path of your own. A `WARN` that a
+capture went to `_unsorted/` means no run is active: fix that first (see
+"Where evidence goes" in the skill) and capture again. Save a tree with
+`--save` when a finding depends on what the tree showed, for example a missing
+testID.
 
 The driver reports in plain text, not glyphs: `OK:` for a completed command,
 `WARN:` for something that degraded, `ERROR:` for a failure, and
