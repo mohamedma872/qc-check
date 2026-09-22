@@ -48,8 +48,14 @@ const TEXT_EXT = new Set(['.js', '.json', '.md', '.yaml', '.yml', '.sh', '.txt']
 
 function trackedFiles() {
   try {
-    const out = execFileSync('git', ['ls-files'], { cwd: ROOT, encoding: 'utf8' });
-    return out.split('\n').filter(Boolean);
+    // Tracked files plus anything staged or newly written but not ignored, so
+    // a leak is caught before it is committed rather than after.
+    const out = execFileSync(
+      'git',
+      ['ls-files', '--cached', '--others', '--exclude-standard'],
+      { cwd: ROOT, encoding: 'utf8' },
+    );
+    return [...new Set(out.split('\n').filter(Boolean))];
   } catch (_) {
     // Not a git repo yet: walk the tree instead.
     const acc = [];
@@ -83,8 +89,12 @@ for (const rel of trackedFiles()) {
   lines.forEach((line, i) => {
     const lineNo = i + 1;
 
+    // A template-literal placeholder is a variable, not a hostname, so blank
+    // interpolations out before looking for concrete identifiers.
+    const scan = line.replace(/\$\{[^}]*\}/g, '$');
+
     // 1. URLs must point at an allowed host.
-    const urls = line.match(/https?:\/\/[^\s"'`)<>\]]+/g) || [];
+    const urls = scan.match(/https?:\/\/[^\s"'`)<>\]$]+/g) || [];
     for (const u of urls) {
       let host;
       try {
@@ -100,14 +110,14 @@ for (const rel of trackedFiles()) {
     // 2. Reverse-DNS application identifiers must be example packages.
     // Deliberately narrow: only strings that start with a TLD-like segment,
     // so dotted code paths such as util.inspect.custom are not candidates.
-    const pkgs = line.match(/(?<![.\w])(?:com|net|org|io|co|dev|ai|me)(?:\.[a-zA-Z][a-zA-Z0-9_]*){2,}\b/g) || [];
+    const pkgs = scan.match(/(?<![.\w])(?:com|net|org|io|co|dev|ai|me)(?:\.[a-zA-Z][a-zA-Z0-9_]*){2,}\b/g) || [];
     for (const p of pkgs) {
       if (ALLOWED_PKG_PREFIXES.some((pre) => p.startsWith(pre))) continue;
       report(rel, lineNo, line, `identifier "${p}" looks like a real package id`);
     }
 
     // 3. Ticket ids must use a documented placeholder prefix.
-    const tickets = line.match(/\b[A-Z]{2,10}-\d{1,6}\b/g) || [];
+    const tickets = scan.match(/\b[A-Z]{2,10}-\d{1,6}\b/g) || [];
     for (const t of tickets) {
       const prefix = t.split('-')[0];
       if (!ALLOWED_TICKET_PREFIXES.includes(prefix)) {
@@ -118,7 +128,7 @@ for (const rel of trackedFiles()) {
     // 4. No device serial pinned in configuration, where it would take effect.
     // Prose and shell examples may name one; a shipped config may not.
     if (path.extname(rel) === '.json') {
-      const udids = line.match(/\bemulator-\d{4,}\b/g) || [];
+      const udids = scan.match(/\bemulator-\d{4,}\b/g) || [];
       for (const u of udids) report(rel, lineNo, line, `pinned device serial "${u}"`);
     }
   });
