@@ -76,6 +76,40 @@ device pass. See [reporting](../skill/references/reporting.md).
 
 ---
 
+## agent
+
+```json
+"agent": {
+  "kind": "claude",
+  "command": "",
+  "extraArgs": [],
+  "headless": false,
+  "timeoutMinutes": 180
+}
+```
+
+Which AI agent `qc-check run` hands the workflow to. The workflow is identical
+for all of them, so this only changes the invocation.
+
+| `kind` | Behaviour |
+|--------|-----------|
+| `claude` | Invokes the `claude` binary |
+| `codex` | Invokes the `codex` binary |
+| `custom` | Runs `command`. A `{prompt}` placeholder is substituted; without one the prompt arrives on stdin |
+| `none` | Invokes nothing. `qc-check prompt` gives you the text to paste |
+
+`extraArgs` is appended to the invocation, which is where a model flag or a
+permission flag goes.
+
+`headless` runs without a human: the test plan is auto-approved and publishing
+is skipped. Use it for automation, not for work you intend to trust unreviewed.
+`--headless` sets it for one run.
+
+`timeoutMinutes` aborts the agent. A full device pass is slow, so do not set it
+low. The run is resumable, so a timeout costs progress, not evidence.
+
+---
+
 ## repo
 
 ```json

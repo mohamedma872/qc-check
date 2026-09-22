@@ -3,8 +3,8 @@
 This file is the generic adapter. It does not contain the workflow.
 
 **The canonical workflow is `WORKFLOW.md` in this same directory**, installed
-at `qc-check-skill/WORKFLOW.md` in the host repository, with its reference docs
-in `qc-check-skill/references/`. Every agent reads that same file, so the QC
+at `qc-check-workflow/WORKFLOW.md` in the host repository, with its reference docs
+in `qc-check-workflow/references/`. Every agent reads that same file, so the QC
 run is the same work in the same order no matter who drives it. This adapter
 only says how to wire a host that has no purpose-built adapter.
 
@@ -38,12 +38,12 @@ Paste this into the agent, from the host repository root:
 ```text
 You are running the qc-check skill for this repository.
 
-1. Read qc-check-skill/WORKFLOW.md in full. It is the canonical QC workflow
+1. Read qc-check-workflow/WORKFLOW.md in full. It is the canonical QC workflow
    and it overrides your own habits about ordering, gates, and reporting.
 2. Read qc.config.json at the repo root. Every project-specific fact comes
    from it. Never read or print the file named by credentialsFile; the
    scripts in qc/ consume it for you.
-3. Read a file in qc-check-skill/references/ only when the workflow tells you
+3. Read a file in qc-check-workflow/references/ only when the workflow tells you
    to, at the phase that needs it.
 4. Map the workflow's four capabilities onto your own tools before you start,
    and tell me the mapping in one line each: visible task list (one task per

@@ -1,12 +1,35 @@
-# Adapters: running this on any agent
+# Running this on any agent
 
-The workflow is one file. `skill/SKILL.md` holds the entire QC procedure and
-is installed verbatim as `WORKFLOW.md` next to whichever adapter you chose.
-An adapter never restates the workflow. It only answers four questions about
-the host agent.
+The workflow is one file. `skill/SKILL.md` holds the entire QC procedure, and
+everything else is plumbing. That split is the point: when the procedure
+improves, it improves for every agent at once.
 
-That split is the point. When the procedure improves, it improves for every
-agent at once, and the adapters stay a page long.
+There are two ways to get the workflow to an agent, and most people only need
+the first.
+
+**The CLI drives the agent.** `qc-check run ABC-123` assembles the prompt from
+`skill/SKILL.md` plus your resolved configuration and invokes the agent named
+by `agent.kind`. For an agent the CLI does not know, set `agent.kind` to
+`custom` and give it a command:
+
+```json
+"agent": { "kind": "custom", "command": "my-agent --prompt {prompt}" }
+```
+
+A `{prompt}` placeholder is substituted; without one the prompt arrives on
+stdin. If that does not fit either, set `agent.kind` to `none` and pipe it:
+
+```bash
+qc-check prompt ABC-123 | my-agent
+```
+
+That covers any agent that can run shell commands and read files. You do not
+need an adapter.
+
+**An adapter makes it a slash command.** `qc-check install --agent claude` puts
+the same workflow where an agent looks for skills, so a run can be started from
+inside an agent session instead of a shell. An adapter never restates the
+workflow. It only answers four questions about the host agent.
 
 ## The four capabilities
 
@@ -30,12 +53,12 @@ work you intend to trust unreviewed.
 |---------|-------------|------------|
 | `agents/claude-code/` | `.claude/skills/qc-check/` in the repo | `/qc-check ABC-123` |
 | `agents/codex/` | `~/.codex/skills/qc-check/` | `Use $qc-check for ABC-123` |
-| `agents/generic/` | `./qc-check-skill/` in the repo | paste the bootstrap prompt from `AGENTS.md` |
+| `agents/generic/` | `./qc-check-workflow/` in the repo | paste the bootstrap prompt from `AGENTS.md` |
 
 Install one with:
 
 ```bash
-npx qc-check install --agent claude    # or codex, or generic
+qc-check install --agent claude    # or codex, or generic
 ```
 
 ## Writing a new adapter

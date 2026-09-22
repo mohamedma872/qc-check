@@ -1,7 +1,10 @@
 # Claude Code adapter
 
+> Optional. `qc-check run` already drives your agent from the shell. Install an
+> adapter only if you would rather start a run from inside an agent session.
+
 ```bash
-npx qc-check install --agent claude
+qc-check install --agent claude
 ```
 
 Installs into the host repository:
@@ -21,7 +24,7 @@ Invoke it with `/qc-check ABC-123`, `/qc-check full`, or `/qc-check fix ABC-123`
 Plain English works too, for example "QC check ABC-123 on phone and tablet".
 
 Configuration lives in `qc.config.json` at the repo root, written by
-`npx qc-check init`. See the repository README and `docs/CONFIGURATION.md` for
+`qc-check setup`. See the repository README and `docs/CONFIGURATION.md` for
 every key, and for the gitignored credentials file that the runtime reads and
 no agent ever opens.
 

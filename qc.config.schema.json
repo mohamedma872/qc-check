@@ -1,8 +1,8 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://github.com/mohamedma872/qc-check-skill/qc.config.schema.json",
+  "$id": "https://github.com/mohamedma872/qc-check/qc.config.schema.json",
   "title": "qc-check configuration",
-  "description": "Every project-specific fact the QC skill needs. Lives at the host repository root as qc.config.json.",
+  "description": "Every project-specific fact qc-check needs. Lives at the host repository root as qc.config.json.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -42,6 +42,38 @@
         },
         "passLabel": { "type": "string", "default": "QC-Agent-Pass", "description": "Label applied only to a clean PASS run." },
         "blockedLabel": { "type": "string", "default": "BE-Blocking", "description": "Label applied when the blocker is outside the app." }
+      }
+    },
+
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Which AI agent the CLI hands the QC workflow to. The workflow is identical for all of them; only the invocation differs.",
+      "properties": {
+        "kind": {
+          "enum": ["claude", "codex", "custom", "none"],
+          "default": "claude",
+          "description": "claude and codex are invoked directly. custom uses the command below. none means qc-check only prints the prompt for you to paste."
+        },
+        "command": {
+          "type": "string",
+          "description": "For kind custom: the command to run. A {prompt} placeholder is replaced with the QC prompt; without it the prompt arrives on stdin."
+        },
+        "extraArgs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Extra arguments appended to the agent invocation, for example a model flag."
+        },
+        "headless": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run without a human. Auto-approves the test plan and skips publishing. Use for automation, not for work you intend to trust unreviewed."
+        },
+        "timeoutMinutes": {
+          "type": "integer",
+          "default": 180,
+          "description": "Abort the agent after this long. A full device pass is slow; do not set it low."
+        }
       }
     },
 

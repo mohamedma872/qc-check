@@ -43,7 +43,7 @@ Then apply the Claude Code notes below.
 
 ## Host notes
 
-- Installed by `npx qc-check install --agent claude` into
+- Installed by `qc-check install --agent claude` into
   `.claude/skills/qc-check/`: this `SKILL.md`, `WORKFLOW.md`, and `references/`.
 - `Bash` has a default timeout well under an emulator cold boot. Raise
   `timeout` for boot, build, and install commands, or run them in the

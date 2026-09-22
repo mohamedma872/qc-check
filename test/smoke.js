@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 'use strict';
 
-// End-to-end check of the installer and the runtime, with no device and no
-// network. Creates a throwaway host repo, runs init / install / doctor, then
-// exercises the state and cost scripts.
+// End-to-end check of the CLI with no device, no agent and no network.
+// Builds a throwaway app repository, configures it, and exercises every
+// command that does not require hardware.
 //
 //   node test/smoke.js
 
@@ -25,7 +25,7 @@ function check(name, fn) {
     process.stdout.write(`  ok    ${name}\n`);
   } catch (err) {
     failures += 1;
-    process.stdout.write(`  FAIL  ${name}\n        ${err.message.split('\n')[0]}\n`);
+    process.stdout.write(`  FAIL  ${name}\n        ${String(err.message).split('\n')[0]}\n`);
   }
 }
 
@@ -37,94 +37,216 @@ function run(args, opts = {}) {
   });
 }
 
+// Run and tolerate a non-zero exit, returning both streams.
+function runSoft(args, opts = {}) {
+  try {
+    return { status: 0, out: run(args, opts) };
+  } catch (err) {
+    return {
+      status: err.status === undefined ? 1 : err.status,
+      out: `${String(err.stdout || '')}${String(err.stderr || '')}`,
+    };
+  }
+}
+
 function assert(cond, msg) {
   if (!cond) throw new Error(msg);
 }
 
-const host = fs.mkdtempSync(path.join(os.tmpdir(), 'qc-host-'));
+// A minimal but realistic host app repo, so setup has something to detect.
+function makeHostRepo() {
+  const host = fs.mkdtempSync(path.join(os.tmpdir(), 'qc-host-'));
+  const write = (rel, body) => {
+    const p = path.join(host, rel);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, body);
+  };
+
+  write(
+    'package.json',
+    JSON.stringify(
+      {
+        name: 'example-app',
+        scripts: {
+          test: 'jest',
+          lint: 'eslint .',
+          'android:staging': 'react-native run-android --variant=stagingDebug',
+        },
+      },
+      null,
+      2,
+    ),
+  );
+  write('yarn.lock', '');
+  write(
+    'android/app/build.gradle',
+    `android {
+  defaultConfig { applicationId "com.example.app" }
+  productFlavors {
+    staging { applicationIdSuffix ".staging" }
+    production { }
+  }
+}`,
+  );
+  write(
+    'android/app/src/main/AndroidManifest.xml',
+    `<manifest><application><activity android:name=".MainActivity">
+      <intent-filter><action android:name="android.intent.action.MAIN"/>
+      <category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+    </activity></application></manifest>`,
+  );
+  write('src/navigation/RootNavigator.tsx', 'export default null;\n');
+  write('src/translations/en/common.json', '{}');
+  write('src/translations/ar/common.json', '{}');
+  write('src/api/services/example.ts', 'export {};\n');
+  return host;
+}
+
+const host = makeHostRepo();
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'qc-home-'));
 process.stdout.write(`smoke: host repo at ${host}\n\n`);
 
 try {
-  check('--help exits 0', () => {
+  check('--help lists the commands', () => {
     const out = run([CLI, '--help']);
-    assert(out.includes('qc-check'), 'help text missing');
-  });
-
-  check('init scaffolds config, credentials and gitignore', () => {
-    run([CLI, 'init', '--dir', host]);
-    assert(fs.existsSync(path.join(host, 'qc.config.json')), 'qc.config.json not written');
-    const cfg = JSON.parse(fs.readFileSync(path.join(host, 'qc.config.json'), 'utf8'));
-    assert(cfg.project && cfg.project.reportsDir, 'config missing project.reportsDir');
-    const ignore = fs.readFileSync(path.join(host, '.gitignore'), 'utf8');
-    assert(ignore.includes('qc-reports/'), 'reports dir not gitignored');
-    assert(ignore.includes(cfg.credentialsFile), 'credentials file not gitignored');
-  });
-
-  check('doctor reports what is still missing', () => {
-    let code = 0;
-    try {
-      run([CLI, 'doctor', '--dir', host]);
-    } catch (err) {
-      code = err.status;
+    for (const cmd of ['setup', 'doctor', 'run', 'prompt', 'status', 'report', 'install']) {
+      assert(out.includes(cmd), `help is missing "${cmd}"`);
     }
-    assert(code !== 0, 'doctor should exit non-zero before install');
   });
 
-  for (const agent of ['claude', 'generic']) {
-    check(`install --agent ${agent}`, () => {
-      run([CLI, 'install', '--agent', agent, '--dir', host]);
-      assert(fs.existsSync(path.join(host, 'qc', 'driver.js')), 'runtime not copied');
-      assert(fs.existsSync(path.join(host, 'qc', 'config.js')), 'config loader not copied');
-      const skillDir =
-        agent === 'claude'
-          ? path.join(host, '.claude', 'skills', 'qc-check')
-          : path.join(host, 'qc-check-skill');
-      assert(fs.existsSync(path.join(skillDir, 'WORKFLOW.md')), 'canonical workflow not copied');
-      assert(fs.existsSync(path.join(skillDir, 'references')), 'references not copied');
-    });
-  }
+  check('every command has its own help', () => {
+    for (const cmd of ['setup', 'doctor', 'run', 'prompt', 'status', 'report', 'install']) {
+      const r = runSoft([CLI, cmd, '--help']);
+      assert(r.status === 0, `${cmd} --help exited ${r.status}`);
+      assert(r.out.length > 20, `${cmd} --help printed nothing useful`);
+    }
+  });
 
-  check('install --agent codex targets the home skills folder', () => {
+  check('doctor refuses an unconfigured repo and names the fix', () => {
+    const r = runSoft([CLI, 'doctor', '--dir', host]);
+    assert(r.status !== 0, 'doctor should exit non-zero before setup');
+    assert(/qc-check setup/.test(r.out), 'doctor should point at setup');
+  });
+
+  check('setup --yes configures the repo without prompting', () => {
+    run([CLI, 'setup', '--yes', '--dir', host]);
+    assert(fs.existsSync(path.join(host, 'qc.config.json')), 'qc.config.json not written');
+    assert(fs.existsSync(path.join(host, 'qc', 'driver.js')), 'runtime not installed');
+    const cfg = JSON.parse(fs.readFileSync(path.join(host, 'qc.config.json'), 'utf8'));
+    assert(cfg.project && cfg.project.reportsDir, 'project.reportsDir missing');
+    assert(cfg.agent && cfg.agent.kind, 'agent.kind missing');
+    const ignore = fs.readFileSync(path.join(host, '.gitignore'), 'utf8');
+    assert(ignore.includes(cfg.credentialsFile), 'credentials file not gitignored');
+    assert(fs.existsSync(path.join(host, cfg.credentialsFile)), 'credentials template not written');
+  });
+
+  check('setup detected the project instead of guessing', () => {
+    const cfg = JSON.parse(fs.readFileSync(path.join(host, 'qc.config.json'), 'utf8'));
+    const flavors = JSON.stringify(cfg.app.flavors || {});
+    assert(/com\.example\.app/.test(flavors), `android package not detected: ${flavors}`);
+    assert(
+      (cfg.project.locales || []).includes('ar'),
+      `locales not detected: ${JSON.stringify(cfg.project.locales)}`,
+    );
+    assert(
+      (cfg.project.rtlLocales || []).includes('ar'),
+      'ar should have been classified right-to-left',
+    );
+    assert(/jest/.test(cfg.codeMap.testCommand || ''), 'test command not detected');
+  });
+
+  check('setup is idempotent and keeps hand edits', () => {
+    const p = path.join(host, 'qc.config.json');
+    const cfg = JSON.parse(fs.readFileSync(p, 'utf8'));
+    cfg.project.name = 'Edited By Hand';
+    cfg.budget.runCap = 7;
+    fs.writeFileSync(p, JSON.stringify(cfg, null, 2));
+    run([CLI, 'setup', '--yes', '--dir', host]);
+    const after = JSON.parse(fs.readFileSync(p, 'utf8'));
+    assert(after.project.name === 'Edited By Hand', 'hand-edited name was overwritten');
+    assert(after.budget.runCap === 7, 'hand-edited budget was overwritten');
+  });
+
+  check('prompt assembles a complete, credential-free prompt', () => {
+    const out = run([CLI, 'prompt', 'ABC-123', '--dir', host]);
+    assert(out.length > 2000, `prompt looks truncated (${out.length} chars)`);
+    assert(/ABC-123/.test(out), 'prompt does not name the target');
+    assert(/test.plan/i.test(out), 'prompt is missing the test-plan phase');
+    assert(!/CHANGE_ME/.test(out), 'prompt leaked the credentials template');
+    assert(!/password\s*[:=]\s*['"]/.test(out), 'prompt looks like it contains a credential');
+  });
+
+  check('run --dry-run shows what would be executed', () => {
+    const r = runSoft([CLI, 'run', 'ABC-123', '--dir', host, '--dry-run']);
+    assert(r.status === 0, `dry run exited ${r.status}: ${r.out.slice(0, 200)}`);
+    assert(r.out.length > 20, 'dry run printed nothing');
+  });
+
+  check('run rejects a target that is not a valid ticket', () => {
+    const r = runSoft([CLI, 'run', 'not a ticket', '--dir', host, '--dry-run']);
+    assert(r.status !== 0, 'an invalid ticket should be refused');
+  });
+
+  check('status reports an empty repo, then a real run', () => {
+    let out = run([CLI, 'status', '--dir', host]);
+    assert(/no runs/i.test(out), `expected an empty-state message, got: ${out.slice(0, 120)}`);
+
+    const stateJs = path.join(host, 'qc', 'state.js');
+    run([stateJs, 'ABC-123', 'set', 'ticket', 'pass'], { cwd: host });
+    out = run([CLI, 'status', 'ABC-123', '--dir', host]);
+    assert(/ticket/.test(out), 'status does not show the phase');
+  });
+
+  check('report explains itself when there is no report yet', () => {
+    const r = runSoft([CLI, 'report', 'ABC-123', '--dir', host]);
+    assert(r.status !== 0, 'a missing report should exit non-zero');
+    assert(/status|run/i.test(r.out), 'should suggest what to do next');
+  });
+
+  check('report prints a finished report', () => {
+    const cfg = JSON.parse(fs.readFileSync(path.join(host, 'qc.config.json'), 'utf8'));
+    const file = path.join(host, cfg.project.reportsDir, 'ABC-123-report.md');
+    fs.writeFileSync(file, '# ABC-123\n\n## Overall: PASS\n');
+    const out = run([CLI, 'report', 'ABC-123', '--dir', host]);
+    assert(/Overall: PASS/.test(out), 'report body not printed');
+  });
+
+  check('install --agent wires up a slash command', () => {
+    run([CLI, 'install', '--agent', 'claude', '--dir', host]);
+    const dir = path.join(host, '.claude', 'skills', 'qc-check');
+    assert(fs.existsSync(path.join(dir, 'WORKFLOW.md')), 'workflow not installed');
+    assert(fs.existsSync(path.join(dir, 'references')), 'references not installed');
+
     run([CLI, 'install', '--agent', 'codex', '--dir', host], {
       env: { ...process.env, HOME: home },
     });
-    const dir = path.join(home, '.codex', 'skills', 'qc-check');
-    assert(fs.existsSync(path.join(dir, 'WORKFLOW.md')), 'codex workflow not installed');
+    assert(
+      fs.existsSync(path.join(home, '.codex', 'skills', 'qc-check', 'WORKFLOW.md')),
+      'codex workflow not installed',
+    );
   });
 
-  check('install --agent nonsense is rejected', () => {
-    let code = 0;
-    try {
-      run([CLI, 'install', '--agent', 'nonsense', '--dir', host]);
-    } catch (err) {
-      code = err.status;
+  check('install rejects an unknown agent', () => {
+    const r = runSoft([CLI, 'install', '--agent', 'nonsense', '--dir', host]);
+    assert(r.status !== 0, 'unknown agent should fail');
+  });
+
+  check('unknown command fails clearly', () => {
+    const r = runSoft([CLI, 'nonsense']);
+    assert(r.status !== 0, 'unknown command should exit non-zero');
+    assert(/unknown command/i.test(r.out), 'should say the command is unknown');
+  });
+
+  check('every shipped script parses', () => {
+    const dirs = ['cli', 'bin', 'runtime', 'test'];
+    for (const d of dirs) {
+      for (const f of fs.readdirSync(path.join(ROOT, d))) {
+        if (f.endsWith('.js')) run(['--check', path.join(ROOT, d, f)]);
+      }
     }
-    assert(code !== 0, 'unknown agent should fail');
   });
 
-  check('doctor passes once configured', () => {
-    // The scaffolded credentials template counts as present.
-    run([CLI, 'doctor', '--dir', host]);
-  });
-
-  check('every runtime script parses', () => {
-    for (const f of fs.readdirSync(path.join(host, 'qc'))) {
-      if (f.endsWith('.js')) run(['--check', path.join(host, 'qc', f)]);
-    }
-  });
-
-  check('state.js tracks phases and gates the device pass', () => {
-    const state = path.join(host, 'qc', 'state.js');
-    if (!fs.existsSync(state)) throw new Error('state.js not installed');
-    run([state, 'ABC-123', 'set', 'ticket', 'pass'], { cwd: host });
-    const out = run([state, 'ABC-123', 'get'], { cwd: host });
-    assert(/ticket/.test(out), 'phase not recorded');
-    const reports = path.join(host, 'qc-reports');
-    assert(fs.existsSync(reports), 'reports dir not created');
-  });
-
-  check('no-private-refs guard passes', () => {
+  check('leak guard passes', () => {
     run([path.join(ROOT, 'test', 'no-private-refs.js')], { cwd: ROOT });
   });
 } finally {

@@ -4,7 +4,7 @@ Conventions used in this file:
 
 | Placeholder | Comes from |
 |-------------|-----------|
-| `qc/` | where the installer put the runtime inside the host repo (`npx qc-check init`) |
+| `qc/` | where the installer put the runtime inside the host repo (`qc-check setup`) |
 | `<reportsDir>/` | `config.project.reportsDir` (default `qc-reports`) |
 | `ABC-123` | the ticket id, validated against `config.tracker.ticketPattern` |
 | `<env>` | `QC_ENV`, else `config.backend.defaultEnv` |

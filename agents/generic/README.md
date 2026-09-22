@@ -1,18 +1,21 @@
 # Generic adapter
 
+> Optional. `qc-check run` already drives your agent from the shell. Install an
+> adapter only if you would rather start a run from inside an agent session.
+
 For any tool-using agent without a purpose-built adapter in `agents/`.
 
 ```bash
-npx qc-check install --agent generic
+qc-check install --agent generic
 ```
 
 Installs into the host repository:
 
 | Path | What |
 |---|---|
-| `qc-check-skill/AGENTS.md` | this adapter: the four capabilities, the bootstrap prompt, the mapping table |
-| `qc-check-skill/WORKFLOW.md` | the canonical workflow, copied verbatim from `skill/SKILL.md` |
-| `qc-check-skill/references/` | the per-phase reference docs |
+| `qc-check-workflow/AGENTS.md` | this adapter: the four capabilities, the bootstrap prompt, the mapping table |
+| `qc-check-workflow/WORKFLOW.md` | the canonical workflow, copied verbatim from `skill/SKILL.md` |
+| `qc-check-workflow/references/` | the per-phase reference docs |
 | `qc/` | the runtime scripts the workflow calls |
 
 Agents that read `AGENTS.md` files on their own pick it up from there. For
@@ -24,6 +27,6 @@ tool names. The workflow itself stays in one file, shared by every agent, so
 porting the skill to a new host never forks the procedure.
 
 Configuration lives in `qc.config.json` at the repo root, written by
-`npx qc-check init`. See the repository README and `docs/CONFIGURATION.md` for
+`qc-check setup`. See the repository README and `docs/CONFIGURATION.md` for
 every key, and for the gitignored credentials file that the runtime reads and
 no agent ever opens.

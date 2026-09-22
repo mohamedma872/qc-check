@@ -83,7 +83,7 @@ node qc/driver.js input --selector <id> --text "$(node -p "const c=require('./qc
 
 The credentials object itself prints as `[credentials redacted]`. If the file
 is missing or a field is empty, stop and ask the user to create it from
-`qc/credentials.example.js` (`npx qc-check init` writes it) and fill it in.
+`qc/credentials.example.js` (`qc-check setup` writes it) and fill it in.
 
 ## Step 0: visible progress and resume, before anything else
 

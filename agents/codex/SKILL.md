@@ -46,7 +46,7 @@ same thing. Treat it as `Use $qc-check for <target>`.
 
 ## Host notes
 
-- Installed by `npx qc-check install --agent codex` into
+- Installed by `qc-check install --agent codex` into
   `~/.codex/skills/qc-check/`: this `SKILL.md`, `openai.yaml`, `WORKFLOW.md`,
   and `references/`. Restart Codex afterwards so the skill list refreshes.
 - The skill folder is global but the run is repo-local. `WORKFLOW.md` is read

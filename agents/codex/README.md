@@ -1,7 +1,10 @@
 # Codex adapter
 
+> Optional. `qc-check run` already drives your agent from the shell. Install an
+> adapter only if you would rather start a run from inside an agent session.
+
 ```bash
-npx qc-check install --agent codex
+qc-check install --agent codex
 ```
 
 Installs to `~/.codex/skills/qc-check/`:
@@ -24,7 +27,7 @@ Invoke it with `Use $qc-check for ABC-123`, `Use $qc-check for full`, or
 the skill folder is global, but the run reads `qc/` and writes evidence
 relative to the repository.
 
-Configuration lives in `qc.config.json`, written by `npx qc-check init`. See
+Configuration lives in `qc.config.json`, written by `qc-check setup`. See
 the repository README and `docs/CONFIGURATION.md` for every key, and for the
 gitignored credentials file that the runtime reads and no agent ever opens.
 
