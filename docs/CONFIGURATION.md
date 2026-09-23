@@ -4,7 +4,7 @@ Everything project-specific lives in one file at your repository root:
 `qc.config.json`. The skill and the runtime scripts read it. Nothing about
 your app is baked into the code.
 
-Create it with `npx qc-check init`, then check it with `npx qc-check doctor`.
+Create it with `qc-check setup`, then check it with `qc-check doctor`.
 
 A JSON Schema ships alongside it (`qc.config.schema.json`), so editors that
 understand `$schema` will complete and validate the keys as you type.

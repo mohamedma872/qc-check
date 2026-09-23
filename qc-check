@@ -1,0 +1,23 @@
+#!/bin/sh
+# Run qc-check straight from a clone, with no install step:
+#
+#   git clone https://github.com/mohamedma872/qc-check.git
+#   ./qc-check/qc-check setup
+#
+# Resolve symlinks so the wrapper still finds the package when it is linked
+# onto the PATH by hand.
+self="$0"
+while [ -L "$self" ]; do
+  link="$(readlink "$self")"
+  case "$link" in
+    /*) self="$link" ;;
+    *) self="$(dirname "$self")/$link" ;;
+  esac
+done
+root="$(cd "$(dirname "$self")" && pwd)"
+
+command -v node >/dev/null 2>&1 || {
+  echo "qc-check: Node 18 or newer is required but not on PATH." >&2
+  exit 1
+}
+exec node "$root/bin/qc-check.js" "$@"

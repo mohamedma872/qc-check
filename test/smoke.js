@@ -316,6 +316,41 @@ try {
     }
   });
 
+  check('a clone runs with no install step', () => {
+    const wrapper = path.join(ROOT, 'qc-check');
+    assert(fs.existsSync(wrapper), 'the ./qc-check wrapper is missing');
+    assert(fs.statSync(wrapper).mode & 0o111, 'the ./qc-check wrapper is not executable');
+    const out = execFileSync(wrapper, ['--version'], { encoding: 'utf8' }).trim();
+    assert(/^\d+\.\d+\.\d+$/.test(out), `wrapper printed "${out}"`);
+  });
+
+  check('the installer is valid POSIX sh and self-documents', () => {
+    const script = path.join(ROOT, 'install.sh');
+    assert(fs.existsSync(script), 'install.sh is missing');
+    execFileSync('sh', ['-n', script]); // parse without executing
+    const help = execFileSync('sh', [script, '--help'], { encoding: 'utf8' });
+    for (const flag of ['--prefix', '--ref', '--update', '--uninstall']) {
+      assert(help.includes(flag), `install.sh --help does not mention ${flag}`);
+    }
+    // Ignore comments: the script says it does not use sudo, which is the point.
+    const src = fs.readFileSync(script, 'utf8')
+      .split('\n')
+      .filter((l) => !/^\s*#/.test(l))
+      .join('\n');
+    assert(!/(^|[;&|\s])sudo\s/.test(src), 'the installer must never invoke sudo');
+    assert(!/npm (install|i) /.test(src), 'the installer must not depend on npm');
+  });
+
+  check('installer rejects an unknown option', () => {
+    let failed = false;
+    try {
+      execFileSync('sh', [path.join(ROOT, 'install.sh'), '--nonsense'], { stdio: 'pipe' });
+    } catch (_) {
+      failed = true;
+    }
+    assert(failed, 'an unknown option should be refused');
+  });
+
   check('leak guard passes', () => {
     run([path.join(ROOT, 'test', 'no-private-refs.js')], { cwd: ROOT });
   });

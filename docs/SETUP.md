@@ -61,14 +61,32 @@ xcrun simctl list devices available
 ## 2. Install the CLI
 
 ```bash
-npm install -g qc-check
+curl -fsSL https://raw.githubusercontent.com/mohamedma872/qc-check/main/install.sh | sh
 ```
 
-Or run it without installing:
+That downloads the tool to `~/.qc-check` and links `qc-check` into the first
+writable bin directory on your PATH, preferring `~/.local/bin`. Nothing goes
+anywhere system-wide and no sudo is involved. If the bin directory is not on
+your PATH yet, the installer prints the line to add to your shell profile.
+
+Confirm it:
 
 ```bash
-npx qc-check --help
+qc-check --version
 ```
+
+### Other ways to install
+
+| You want | Do this |
+|----------|---------|
+| To read the code before running it | `git clone https://github.com/mohamedma872/qc-check.git` then `./qc-check/qc-check --help`. A clone runs as-is |
+| It somewhere specific | `sh install.sh --prefix ~/bin` |
+| A fixed version | `sh install.sh --ref v1.2.0` |
+| To update | `sh install.sh --update`, or `git pull` in a clone |
+| To remove it | `sh install.sh --uninstall`. Your config, `qc/` and reports stay |
+
+The only requirement is Node 18 or newer, because the CLI and the device
+scripts are JavaScript. There is no npm install step and no build step.
 
 ---
 

@@ -12,13 +12,27 @@ drives the device scripts, and keeps the run resumable. Claude Code, Codex and
 anything else are interchangeable backends.
 
 ```bash
-npm install -g qc-check
+curl -fsSL https://raw.githubusercontent.com/mohamedma872/qc-check/main/install.sh | sh
 
 cd /path/to/your/app
 qc-check setup          # detect the project, write qc.config.json
 qc-check doctor         # confirm Appium, a device and an agent are ready
 qc-check run ABC-123
 ```
+
+The installer puts the tool in `~/.qc-check` and links `qc-check` into a bin
+directory on your PATH. No npm, no sudo, nothing system-wide. It needs Node 18
+or newer, because the tool and the device scripts are JavaScript.
+
+Prefer to see what you are running first? A clone is immediately usable:
+
+```bash
+git clone https://github.com/mohamedma872/qc-check.git
+./qc-check/qc-check --help
+```
+
+Update with `install.sh --update`, remove with `install.sh --uninstall`. That
+leaves your `qc.config.json`, `qc/` and `qc-reports/` alone.
 
 Full walkthrough: **[docs/SETUP.md](docs/SETUP.md)**
 

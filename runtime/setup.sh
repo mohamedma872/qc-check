@@ -52,7 +52,7 @@ if CONFIG_SUMMARY=$(node "$SCRIPT_DIR/config.js" 2>/dev/null); then
   echo "$CONFIG_SUMMARY" | sed 's/^/  /'
 else
   echo "No qc.config.json found above this directory. Create one with:"
-  echo "  npx qc-check init            (or copy qc.config.example.json to qc.config.json)"
+  echo "  qc-check setup               (or copy qc.config.example.json to qc.config.json)"
 fi
 
 echo ""

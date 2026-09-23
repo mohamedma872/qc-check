@@ -28,6 +28,7 @@ const ALLOWED_HOSTS = [
   '0.0.0.0',
   'github.com',
   'raw.githubusercontent.com',
+  'codeload.github.com',
   'json-schema.org',
   'opensource.org',
   'nodejs.org',
