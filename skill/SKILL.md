@@ -410,8 +410,9 @@ Read the driver's output, do not scan it for symbols. It prints `OK:` on
 success, `WARN:` when it recovered, `ERROR:` when the command failed, and
 `ASSERT FAILED - ...` when an assertion did not hold. An `ASSERT FAILED` line
 is test evidence: record the finding and screenshot before moving on.
-`QC_SESSION_FILE` overrides where the Appium session record is kept, which
-matters when two runs share a machine.
+Each repo keeps its own Appium session record and its own helper ports, so
+runs for different repos can share a machine. A device another repo is driving
+is refused at `connect` rather than taken over.
 
 ## Eval mode (`QC_EVAL=1`), set by an eval runner, never by hand
 

@@ -217,6 +217,16 @@ device needs `udid` (from `xcrun devicectl list devices` or Device Hub) and
 WebDriverAgent's bundle id when the default is taken on your team. See
 [SETUP.md](SETUP.md#ios) for pairing the device.
 
+**Several projects on one machine.** Each repo keeps its own Appium session
+record (`node qc/config.js --session-file` prints the path) and gets its own
+helper-server ports (`appium:systemPort` on Android, `appium:wdaLocalPort` on
+iOS), so two repos can run QC at the same time against one Appium server.
+What they cannot share is a device: `connect` refuses a device another repo is
+driving and names that repo. Give each repo its own emulator, simulator or
+iPhone with `avd` or `udid`; an unpinned profile clashes with any other live
+run on the same platform. A port can be pinned through `caps` if the derived
+one is taken.
+
 `newCommandTimeout` is in seconds and deliberately generous. A QC run
 interleaves device commands with reading source files, and a short timeout
 kills the session mid-pass, taking the screen recording with it.

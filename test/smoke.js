@@ -309,6 +309,22 @@ try {
     fs.writeFileSync(p, JSON.stringify(cfg, null, 2));
   });
 
+  check('each repo gets its own session file and helper ports', () => {
+    const configJs = path.join(host, 'qc', 'config.js');
+    const mine = run([configJs, '--session-file'], { cwd: host }).trim();
+    const other = run([configJs, '--session-file'], { cwd: home }).trim();
+    assert(/qc-session-.+\.json$/.test(mine), `unexpected session path: ${mine}`);
+    assert(mine !== other, 'two repos share one session file');
+    const pinned = run([configJs, '--session-file'], {
+      cwd: host,
+      env: { ...process.env, QC_SESSION_FILE: '/tmp/qc-session-pinned.json' },
+    }).trim();
+    assert(pinned === '/tmp/qc-session-pinned.json', 'QC_SESSION_FILE no longer wins');
+    const caps = JSON.parse(run([configJs, '--caps', 'android'], { cwd: host }));
+    const port = caps['appium:systemPort'];
+    assert(port >= 8200 && port < 8300, `systemPort not derived: ${port}`);
+  });
+
   check('install --agent wires up a slash command', () => {
     run([CLI, 'install', '--agent', 'claude', '--dir', host]);
     const dir = path.join(host, '.claude', 'skills', 'qc-check');

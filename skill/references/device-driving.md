@@ -110,9 +110,12 @@ nohup appium --port 4723 --log /tmp/appium.log >/dev/null 2>&1 & sleep 5
 
 Use `config.devices.appium.host` and `config.devices.appium.port` if they differ
 from the defaults above. `driver.js`, `dump-tree.js` and `record.sh` share one
-session record at `/tmp/qc-session.json`; set `QC_SESSION_FILE` to another path
-when two repos are QC'd side by side, and export it for every command in the
-pass, including `record.sh` and the iOS alert snippet below. iOS simulator:
+session record per repo (`node qc/config.js --session-file` prints it), so
+another repo QC'd on the same machine never touches this run's session; do not
+set `QC_SESSION_FILE` yourself. If `connect` says the device is in use by
+another QC run, do not delete that run's session file or retry in a loop: stop
+and tell the user, and record it as a blocker owned by the user (they wait, or
+give this repo its own `avd` / `udid`). iOS simulator:
 `xcrun simctl list devices | grep Booted`, and check the booted simulator
 matches `config.devices.ios.deviceName` / `config.devices.ios.udid`. If
 `config.devices.<profile>.udid` is empty the driver lets Appium pick the single
@@ -301,7 +304,7 @@ Springboard alerts are not in the app's tree, so `tap --text "Allow"` misses
 them:
 
 ```bash
-SID=$(node -p "require(process.env.QC_SESSION_FILE || '/tmp/qc-session.json').sessionId")
+SID=$(node -p "require('$(node qc/config.js --session-file)').sessionId")
 curl -s -X POST "http://127.0.0.1:4723/session/$SID/alert/accept" -d '{}' -H 'Content-Type: application/json'
 # .../alert/dismiss for the negative button
 ```

@@ -10,7 +10,8 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SESSION_FILE="${QC_SESSION_FILE:-/tmp/qc-session.json}"
+# One session record per repo, the same one driver.js writes.
+SESSION_FILE="${QC_SESSION_FILE:-$(node "$SCRIPT_DIR/config.js" --session-file)}"
 
 usage() {
   cat <<'USAGE'
@@ -30,7 +31,7 @@ Requires an active session created by driver.js connect. The Appium endpoint
 comes from the session record, falling back to devices.appium in qc.config.json.
 
 Environment:
-  QC_SESSION_FILE   session state path (default /tmp/qc-session.json)
+  QC_SESSION_FILE   session state path (default: one per repo)
   QC_RUN_DIR        run folder to save into (set by qc-check run)
 USAGE
 }

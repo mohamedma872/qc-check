@@ -8,12 +8,15 @@
 const fs = require('fs');
 const http = require('http');
 
-const SESSION_FILE = process.env.QC_SESSION_FILE || '/tmp/qc-session.json';
-
 // Required lazily so `--help` works in a repo with no qc.config.json yet.
 function config() {
   // eslint-disable-next-line global-require
   return require('./config.js');
+}
+
+// One session record per host repo, shared with driver.js.
+function sessionFile() {
+  return config().sessionFile();
 }
 
 function printHelp() {
@@ -34,7 +37,7 @@ Requires an active session created by driver.js connect. The Appium host and
 port come from the session record, or from devices.appium in qc.config.json.
 
 Environment:
-  QC_SESSION_FILE   session state path (default /tmp/qc-session.json)
+  QC_SESSION_FILE   session state path (default: one per repo, see config.js --session-file)
   QC_RUN_DIR        run folder to save into (set by qc-check run)
 `);
 }
@@ -109,11 +112,11 @@ function appiumTarget(session) {
     process.exit(0);
   }
 
-  if (!fs.existsSync(SESSION_FILE)) {
-    console.error(`ERROR: no active QC session (${SESSION_FILE} missing). Run driver.js connect first.`);
+  if (!fs.existsSync(sessionFile())) {
+    console.error(`ERROR: no active QC session (${sessionFile()} missing). Run driver.js connect first.`);
     process.exit(1);
   }
-  const session = JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'));
+  const session = JSON.parse(fs.readFileSync(sessionFile(), 'utf8'));
   const { sessionId, platform } = session;
   const showAll = args.includes('--all');
   const grepIdx = args.indexOf('--grep');

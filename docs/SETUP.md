@@ -383,7 +383,7 @@ starting over.
 | Login fails on device | Credentials file missing or unfilled | Fill `qc.credentials.js`; `doctor` reports presence only |
 | No credentials stored for an environment | Credentials file does not have that environment | `qc-check env credentials <env>` to add them, or set `QC_CRED_<ENV>_USERNAME` and `QC_CRED_<ENV>_PASSWORD` |
 | Session dies mid-pass | Appium idle timeout too short | Raise `devices.appium.newCommandTimeout` |
-| Two repos fighting over one session | Shared session file | Export `QC_SESSION_FILE` per repo |
+| `... is in use by another QC run` | Another repo is mid-pass on the same device | Wait for it, or give this repo its own device with `devices.<profile>.avd` / `.udid`. If that run crashed, delete the session file the error names |
 | `refused: the target environment is protected` | Run targets prod, production, live or release, or an environment in `backend.protectedEnvs` | Pass `--allow-protected` if you really mean to QC that environment |
 | `gateway is BLOCKED` | An edge proxy answered with its own HTML page, so the request never reached the API | On a VPN-only environment, connect the VPN. This is not a pass |
 | `something is listening ... but it is not Appium` | Another process holds the Appium port | `lsof -iTCP:4723 -sTCP:LISTEN`, stop it, start Appium |

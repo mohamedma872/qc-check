@@ -9,6 +9,7 @@
 // that cannot be defaulted (an app package, a flavor) raises an error that
 // names the exact config key to fix.
 
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const util = require('util');
@@ -110,6 +111,10 @@ const DEFAULTS = {
 // Device profiles are the keys of `devices` minus the Appium server block.
 const APPIUM_KEY = 'appium';
 
+// Session records live here, one per host repo (see sessionFile()).
+const SESSION_DIR = '/tmp';
+const SESSION_PREFIX = 'qc-session';
+
 let cachedConfig = null;
 let cachedConfigPath = null;
 
@@ -144,6 +149,46 @@ function findConfigFile(startDir) {
     if (parent === dir) {return null;}
     dir = parent;
   }
+}
+
+// The host repo root without loading (or requiring) the config, so the session
+// helpers below also work for `--help` in a repo that is not set up yet.
+function hostRoot() {
+  const file = findConfigFile(process.cwd());
+  return file ? path.dirname(file) : process.cwd();
+}
+
+// Stable short id for a host repo, from its absolute path.
+function projectId(root = hostRoot()) {
+  return crypto.createHash('sha1').update(path.resolve(root)).digest('hex').slice(0, 10);
+}
+
+// One session record per host repo, so two repos QC'd side by side never
+// overwrite each other's session. QC_SESSION_FILE still wins when set.
+function sessionFile() {
+  if (process.env.QC_SESSION_FILE) {return process.env.QC_SESSION_FILE;}
+  const root = hostRoot();
+  const slug = path.basename(root).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 40) || 'repo';
+  return path.join(SESSION_DIR, `${SESSION_PREFIX}-${slug}-${projectId(root)}.json`);
+}
+
+// Every session record on this machine, including the pre-1.2 shared one.
+function sessionFiles() {
+  let names = [];
+  try {
+    names = fs.readdirSync(SESSION_DIR);
+  } catch (_) {
+    return [];
+  }
+  return names
+    .filter(n => n.startsWith(SESSION_PREFIX) && n.endsWith('.json'))
+    .map(n => path.join(SESSION_DIR, n));
+}
+
+// 0-99, fixed per repo: offsets the ports the on-device helper servers use, so
+// two repos sharing one Appium server do not fight over 8100 / 8200.
+function portSlot(root = hostRoot()) {
+  return parseInt(projectId(root).slice(0, 4), 16) % 100;
 }
 
 function die(lines) {
@@ -309,6 +354,8 @@ function capsFor(profile, flavor) {
       // timeout kills the session mid-pass and loses the recording.
       'appium:newCommandTimeout': timeout,
       'appium:waitForQuiescence': false,
+      // Per-repo port, so a second repo's iOS pass does not hijack this WDA.
+      'appium:wdaLocalPort': 8100 + portSlot(cfg.repoRoot),
     };
     if (device.deviceName) {caps['appium:deviceName'] = device.deviceName;}
     if (device.udid) {caps['appium:udid'] = device.udid;}
@@ -335,6 +382,8 @@ function capsFor(profile, flavor) {
     'appium:fullReset': false,
     'appium:autoGrantPermissions': true,
     'appium:newCommandTimeout': timeout,
+    // Per-repo port for the UiAutomator2 server, for the same reason as above.
+    'appium:systemPort': 8200 + portSlot(cfg.repoRoot),
   };
   // Per-flavor activity wins; with neither set Appium launches the package's
   // own launcher activity, which is right for most apps.
@@ -549,6 +598,10 @@ module.exports = {
   credentialsFor,
   credentialStatus,
   envVarNames,
+  // One session per host repo.
+  sessionFile,
+  sessionFiles,
+  projectId,
 };
 
 // --- CLI ---------------------------------------------------------------------
@@ -568,6 +621,7 @@ Options:
   --appium-host    print the Appium host
   --appium-port    print the Appium port
   --caps <profile> [--flavor <name>]   print the Appium capabilities for a profile
+  --session-file   print this repo's Appium session record path
   --help           show this help
 
 Environment:
@@ -583,6 +637,11 @@ With no option it prints a summary. Credential values are never printed.
 function runCli(argv) {
   if (argv.includes('--help') || argv.includes('-h') || argv[0] === 'help') {
     printHelp();
+    return 0;
+  }
+  // Before loadConfig: record.sh asks for this even when no config exists yet.
+  if (argv[0] === '--session-file') {
+    console.log(sessionFile());
     return 0;
   }
   const cfg = loadConfig();

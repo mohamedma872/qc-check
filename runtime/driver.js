@@ -1,20 +1,25 @@
 #!/usr/bin/env node
 // QC Driver - Appium CLI helper for the QC skill.
 // No external dependencies: it speaks the Appium REST API over Node's http.
-// Session state is persisted between commands (default /tmp/qc-session.json,
-// override with QC_SESSION_FILE when several repos are QC'd side by side).
+// Session state is persisted between commands in one record per host repo
+// (/tmp/qc-session-<repo>-<id>.json; QC_SESSION_FILE overrides it), so repos
+// QC'd side by side never share a session.
 // Every device, app and server value comes from qc.config.json via config.js.
 'use strict';
 
 const fs = require('fs');
 const http = require('http');
 
-const SESSION_FILE = process.env.QC_SESSION_FILE || '/tmp/qc-session.json';
-
 // config.js is required lazily so `--help` works in a repo with no config yet.
 function config() {
   // eslint-disable-next-line global-require
   return require('./config.js');
+}
+
+let sessionPath = null;
+function sessionFile() {
+  if (!sessionPath) {sessionPath = config().sessionFile();}
+  return sessionPath;
 }
 
 // --- Appium endpoint ---------------------------------------------------------
@@ -67,13 +72,13 @@ function appiumRequest(method, urlPath, body = null) {
 // --- Session -----------------------------------------------------------------
 
 function loadSession() {
-  if (!fs.existsSync(SESSION_FILE)) {
+  if (!fs.existsSync(sessionFile())) {
     const self = process.argv[1] || 'driver.js';
-    console.error(`ERROR: no active QC session (${SESSION_FILE} missing). Run:`);
+    console.error(`ERROR: no active QC session (${sessionFile()} missing). Run:`);
     console.error(`   node ${self} connect --platform <profile>`);
     process.exit(1);
   }
-  const session = JSON.parse(fs.readFileSync(SESSION_FILE, 'utf8'));
+  const session = JSON.parse(fs.readFileSync(sessionFile(), 'utf8'));
   if (session.host && session.port) {
     appiumTarget = { host: session.host, port: session.port };
   }
@@ -234,6 +239,61 @@ function parseArgs(argv) {
   return result;
 }
 
+// --- Device sharing between repos ---------------------------------------------
+
+// Is another repo's recorded session still open on its Appium server? A
+// record left behind by a crashed run answers no, so it never blocks anyone.
+function sessionAlive(record) {
+  return new Promise(resolve => {
+    const req = http.request(
+      {
+        hostname: record.host || '127.0.0.1',
+        port: record.port || 4723,
+        path: `/session/${record.sessionId}/timeouts`,
+        method: 'GET',
+        timeout: 3000,
+      },
+      res => {
+        let raw = '';
+        res.on('data', chunk => (raw += chunk));
+        res.on('end', () => {
+          try {
+            const v = JSON.parse(raw).value;
+            resolve(Boolean(v) && !v.error);
+          } catch {
+            resolve(false);
+          }
+        });
+      },
+    );
+    req.on('timeout', () => req.destroy());
+    req.on('error', () => resolve(false));
+    req.end();
+  });
+}
+
+// Opening a session on a device another repo is driving kills that repo's
+// session mid-pass. Find such a session before we connect. An unpinned
+// profile (no udid or avd) lets Appium pick any device, so it clashes with
+// every live session on the same platform.
+async function deviceHolder(capabilities, basePlatform) {
+  const want = capabilities['appium:udid'] || capabilities['appium:avd'] || null;
+  for (const file of config().sessionFiles()) {
+    if (file === sessionFile()) {continue;}
+    let other;
+    try {
+      other = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch {
+      continue;
+    }
+    if (!other.sessionId || other.platform !== basePlatform) {continue;}
+    const theirs = other.deviceIds || [];
+    if (want && theirs.length && !theirs.includes(want)) {continue;}
+    if (await sessionAlive(other)) {return { file, other };}
+  }
+  return null;
+}
+
 // --- Commands ----------------------------------------------------------------
 
 async function cmdConnect(opts) {
@@ -264,6 +324,18 @@ async function cmdConnect(opts) {
   const basePlatform = capabilities.platformName.toLowerCase() === 'ios' ? 'ios' : 'android';
   const { host, port } = target();
 
+  const holder = await deviceHolder(capabilities, basePlatform);
+  if (holder) {
+    const device = capabilities['appium:udid'] || capabilities['appium:avd'] || `the ${basePlatform} device`;
+    const owner = holder.other.project || holder.file;
+    console.error(`ERROR: ${device} is in use by another QC run (${owner}).`);
+    console.error('   Wait for that run to finish, or give this repo its own device:');
+    const pin = basePlatform === 'ios' ? 'udid' : 'avd or .udid';
+    console.error(`   set devices.${platform}.${pin} in qc.config.json.`);
+    console.error(`   Stuck from a crashed run? Delete ${holder.file}`);
+    process.exit(1);
+  }
+
   console.log(`Creating Appium session for ${platform} at ${host}:${port} ...`);
 
   const res = await appiumRequest('POST', '/session', {
@@ -284,8 +356,21 @@ async function cmdConnect(opts) {
     flavor: flavor || cfg.app.defaultFlavor,
     host,
     port,
+    // Who holds the device, for other repos' deviceHolder() checks: the
+    // configured ids plus whatever Appium actually picked.
+    project: cfg.repoRoot,
+    deviceIds: [
+      ...new Set(
+        [
+          capabilities['appium:udid'],
+          capabilities['appium:avd'],
+          res.value.capabilities && res.value.capabilities.udid,
+          res.value.capabilities && res.value.capabilities.deviceUDID,
+        ].filter(Boolean),
+      ),
+    ],
   };
-  fs.writeFileSync(SESSION_FILE, JSON.stringify(session, null, 2));
+  fs.writeFileSync(sessionFile(), JSON.stringify(session, null, 2));
   console.log(`OK: session created: ${session.sessionId}`);
   console.log(
     `   profile: ${platform} (${basePlatform}) | flavor: ${session.flavor} | app: ` +
@@ -296,7 +381,7 @@ async function cmdConnect(opts) {
 async function cmdDisconnect() {
   const { sessionId } = loadSession();
   await appiumRequest('DELETE', `/session/${sessionId}`);
-  if (fs.existsSync(SESSION_FILE)) {fs.unlinkSync(SESSION_FILE);}
+  if (fs.existsSync(sessionFile())) {fs.unlinkSync(sessionFile());}
   console.log('OK: session closed');
 }
 
@@ -656,7 +741,7 @@ Environment:
                     --credential and the run folder evidence is saved to
   QC_RUN_DIR        run folder to save evidence into (set by qc-check run)
   QC_FLAVOR         default app flavor
-  QC_SESSION_FILE   session state path (default /tmp/qc-session.json)
+  QC_SESSION_FILE   session state path (default: one per repo, see config.js --session-file)
   QC_EVAL           marks a headless eval run
 `);
 }
