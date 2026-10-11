@@ -294,6 +294,39 @@ function listIosSimulators() {
   }
 }
 
+// Physical iPhones/iPads known to CoreDevice, the layer Xcode 27's Device Hub
+// is built on. devicectl also lists simulators there; simctl stays the source
+// for those. Reads the `properties` block first and the pre-Xcode 27 fields
+// second, so it works on both.
+function listIosRealDevices() {
+  if (process.platform !== 'darwin' || !which('xcrun')) return [];
+  const res = tryExec('xcrun', ['devicectl', 'list', 'devices', '--quiet', '--json-output', '-']);
+  if (!res.ok) return [];
+  try {
+    const devices = (JSON.parse(res.stdout).result || {}).devices || [];
+    const out = [];
+    for (const d of devices) {
+      const p = d.properties || {};
+      const hw = p.hardware || d.hardwareProperties || {};
+      const st = p.state || {};
+      const conn = p.connection || d.connectionProperties || {};
+      if (hw.reality && hw.reality !== 'physical') continue;
+      if (hw.platform && hw.platform !== 'iOS') continue;
+      const udid = hw.udid || d.identifier;
+      if (!udid) continue;
+      out.push({
+        name: st.name || (d.deviceProperties || {}).name || hw.marketingName || udid,
+        udid,
+        model: hw.marketingName || '',
+        connected: conn.state === 'connected' || conn.tunnelState === 'connected',
+      });
+    }
+    return out;
+  } catch (_) {
+    return [];
+  }
+}
+
 // Something answering on the port is not enough: any process can squat it.
 // A real Appium server reports its build version in /status.
 function appiumReachable(host, port) {
@@ -368,6 +401,7 @@ module.exports = {
   tryExec,
   listAvds,
   listIosSimulators,
+  listIosRealDevices,
   appiumReachable,
   appiumStatus,
   deepMerge,

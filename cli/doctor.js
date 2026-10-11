@@ -18,6 +18,7 @@ const {
   which,
   listAvds,
   listIosSimulators,
+  listIosRealDevices,
   appiumStatus,
   pkgVersion,
 } = require('./util');
@@ -108,6 +109,23 @@ async function run(args) {
   if (devices.ios && devices.ios.enabled) {
     if (process.platform !== 'darwin') {
       fix.push('devices.ios.enabled is true but this is not macOS.');
+    } else if (devices.ios.realDevice) {
+      const want = devices.ios.udid;
+      const phones = listIosRealDevices();
+      const found = phones.find((p) => p.udid === want);
+      if (!want) {
+        fix.push('devices.ios.realDevice is true but devices.ios.udid is empty. Find it with `xcrun devicectl list devices` or in Device Hub.');
+      } else if (!found) {
+        fix.push(
+          `devices.ios.udid "${want}" is not a paired iPhone. Connect and trust it, then check Device Hub. ` +
+            `Seen: ${phones.map((p) => `${p.name} (${p.udid})`).join(', ') || 'none'}`,
+        );
+      } else {
+        ok.push(`ios: iPhone ${found.name}${found.connected ? '' : ' (paired, not connected right now)'}`);
+      }
+      if (!devices.ios.teamId) {
+        fix.push('devices.ios.teamId is empty: a real iPhone needs your Apple team id to sign WebDriverAgent.');
+      }
     } else {
       const sims = listIosSimulators();
       const want = devices.ios.deviceName;

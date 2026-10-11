@@ -86,7 +86,7 @@ Ten phases. The gates are hard, not advisory.
 | 4 | `smoke` | Live backend round trip. **Red here means emulators never boot** |
 | 5 | `phone` | Full pass on an Android phone, screenshot per state change |
 | 6 | `tablet` | Tablet pass and responsive checks, only when asked |
-| 7 | `ios` | iOS Simulator pass, only when asked |
+| 7 | `ios` | iOS pass on a simulator or a real iPhone, only when asked |
 | 8 | `unit-tests` | Extend the suites covering the new logic |
 | 9 | `report` | Assemble the report from the evidence on disk |
 | 10 | `publish` | Post it to the tracker, with labels earned by the verdict |

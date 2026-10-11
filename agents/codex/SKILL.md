@@ -1,6 +1,6 @@
 ---
 name: qc-check
-description: Device-level QC for a mobile app. Fetches the ticket, gets a numbered test plan approved, verifies the backend REST contract, drives the real app on an Android emulator or iOS simulator through Appium, extends unit tests, and publishes an evidence-backed report. Use when the user asks Codex to QC check, device-test, smoke-test, sweep the app, or validate a ticket or release build.
+description: Device-level QC for a mobile app. Fetches the ticket, gets a numbered test plan approved, verifies the backend REST contract, drives the real app on an Android emulator, iOS simulator or iPhone through Appium, extends unit tests, and publishes an evidence-backed report. Use when the user asks Codex to QC check, device-test, smoke-test, sweep the app, or validate a ticket or release build.
 ---
 
 # qc-check for Codex

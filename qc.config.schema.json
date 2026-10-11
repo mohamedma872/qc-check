@@ -231,7 +231,25 @@
             },
             "udid": {
               "type": "string",
-              "description": "Simulator udid. Leave empty to let Appium pick by deviceName."
+              "description": "Simulator or iPhone udid. Leave empty to let Appium pick a simulator by deviceName; required when realDevice is true."
+            },
+            "realDevice": {
+              "type": "boolean",
+              "default": false,
+              "description": "Drive a physical iPhone (paired in Xcode 27 Device Hub) instead of a simulator."
+            },
+            "teamId": {
+              "type": "string",
+              "description": "Apple developer team id used to sign WebDriverAgent on a real device (appium:xcodeOrgId)."
+            },
+            "signingId": {
+              "type": "string",
+              "default": "Apple Development",
+              "description": "Code-signing identity for WebDriverAgent on a real device (appium:xcodeSigningId)."
+            },
+            "wdaBundleId": {
+              "type": "string",
+              "description": "Unique WebDriverAgent bundle id for your team, when the default one is taken (appium:updatedWDABundleId)."
             },
             "caps": {
               "$ref": "#/definitions/capsOverride"

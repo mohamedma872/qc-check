@@ -14,7 +14,7 @@ a piece is missing rather than ten minutes into a device run.
 |----------|-----|----------|
 | Node 18 or newer | Runs the CLI and the device scripts | `node --version` |
 | Appium 2 and a driver | Drives the real app | `appium --version` |
-| An Android emulator or iOS simulator | Somewhere to run the app | `emulator -list-avds` |
+| An Android emulator, iOS simulator or iPhone | Somewhere to run the app | `emulator -list-avds` |
 | A build of your app installed on it | The thing under test | it launches by hand |
 | An AI agent CLI | Executes the workflow | `claude --version` or `codex --version` |
 
@@ -54,7 +54,36 @@ macOS only, with Xcode installed.
 
 ```bash
 xcrun simctl list devices available
+xcrun devicectl list devices       # simulators and paired iPhones
 ```
+
+**Xcode 27 and Device Hub.** Xcode 27 replaces Simulator.app with Device Hub,
+which shows simulators and physical iPhones in one window. qc-check works with
+it unchanged for simulators (Appium's XCUITest driver boots them directly). To
+watch a pass, open Device Hub with `open -b com.apple.dt.Devices`.
+
+**A real iPhone.** Pair it once: plug it in, unlock it, tap *Trust*, and turn
+on Developer Mode (Settings › Privacy & Security). It then appears in Device
+Hub and in `xcrun devicectl list devices` with `physical` in the Reality
+column. Appium has to sign its WebDriverAgent helper with your Apple team, so
+the profile needs the device's udid and your team id:
+
+```json
+"ios": {
+  "enabled": true,
+  "realDevice": true,
+  "deviceName": "QA iPhone",
+  "udid": "00008140-000A1C2E0E43801C",
+  "teamId": "ABCDE12345",
+  "signingId": "Apple Development"
+}
+```
+
+Your team id is in Xcode › Settings › Accounts, or on the Apple Developer site
+under Membership. If WebDriverAgent's bundle id is already taken on your team,
+set `wdaBundleId` to something unique such as `com.example.WebDriverAgentRunner`.
+The first session builds and signs WebDriverAgent, which takes a few minutes.
+`qc-check doctor` confirms the iPhone is paired and the team id is set.
 
 ---
 
@@ -244,6 +273,25 @@ the ticket and publishes the report:
 ```
 
 `tools` holds the names of tools **your agent** can call, not credentials.
+
+**Connecting Jira Cloud.** qc-check never holds a Jira token. Your agent reaches
+Jira through an MCP server, and the config names that server's tools. With
+Claude Code and Atlassian's official server:
+
+```bash
+claude mcp add --transport http --scope user atlassian https://mcp.atlassian.com/v2/mcp
+claude                     # then type /mcp, pick "atlassian" and sign in to Atlassian
+```
+
+`/mcp` then lists the server's tools. Claude Code names each one
+`mcp__<server>__<tool>`, so with the server called `atlassian` a tool shown as
+`getJiraIssue` goes into the config as `mcp__atlassian__getJiraIssue`. Copy the
+names exactly as listed into `tracker.tools` (`getIssue`, `addComment`,
+`addLabels`, `uploadAttachment`); leave any your server lacks as `""` and that
+step is skipped. Set `tracker.site` to your Atlassian site and
+`tracker.projectKey` to the project's key. Jira Server or Data Center needs a
+community server such as `sooperset/mcp-atlassian` instead; the config works the
+same way. Check it by asking the agent to fetch one ticket before the first run.
 
 **Agent.**
 

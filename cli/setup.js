@@ -41,7 +41,7 @@ function baseConfig() {
     devices: {
       android: { enabled: true, avd: '', udid: '', deviceName: 'Android Phone' },
       android_tablet: { enabled: false, avd: '', udid: '', deviceName: 'Android Tablet' },
-      ios: { enabled: false, deviceName: '', udid: '' },
+      ios: { enabled: false, deviceName: '', udid: '', realDevice: false, teamId: '' },
       appium: { host: '127.0.0.1', port: 4723, newCommandTimeout: 900 },
     },
     backend: {
@@ -505,6 +505,7 @@ function detect(host) {
     testsGitignored: detectTestsGitignored(host, codeMap.sourceDir),
     avds: u.listAvds(),
     simulators: u.listIosSimulators(),
+    iphones: u.listIosRealDevices(),
     claude: Boolean(u.which('claude')),
     codex: Boolean(u.which('codex')),
   };
@@ -590,6 +591,7 @@ function describeDetections(d) {
     ['default branch', d.defaultBranch || 'not detected'],
     ['emulators', d.avds.length ? d.avds.join(', ') : 'none found'],
     ['ios simulators', d.simulators.length ? `${d.simulators.length} available` : 'none found'],
+    ['iphones', d.iphones.length ? d.iphones.map((p) => p.name).join(', ') : 'none paired'],
     [
       'agents on PATH',
       [d.claude ? 'claude' : '', d.codex ? 'codex' : ''].filter(Boolean).join(', ') || 'none',
@@ -660,9 +662,23 @@ async function askQuestions(host, d, cfg) {
       cfg.devices.android.avd || d.avds[0],
     );
   }
-  if (d.simulators.length) {
-    const wantIos = await u.confirm('Also QC on an iOS simulator?', false);
-    if (wantIos) {
+  if (d.simulators.length || d.iphones.length) {
+    const wantIos = await u.confirm('Also QC on iOS?', false);
+    // A paired iPhone is offered first: Device Hub (Xcode 27) treats physical
+    // and simulated devices alike, and a real device is the stronger evidence.
+    const usePhone = wantIos && d.iphones.length
+      && await u.confirm(`Use the iPhone "${d.iphones[0].name}" instead of a simulator?`, false);
+    if (usePhone) {
+      const phone = d.iphones[0];
+      answers.devices.ios.enabled = true;
+      answers.devices.ios.realDevice = true;
+      answers.devices.ios.deviceName = phone.name;
+      answers.devices.ios.udid = phone.udid;
+      answers.devices.ios.teamId = await u.askWithDefault(
+        'Apple team id (signs WebDriverAgent)',
+        cfg.devices.ios.teamId || '',
+      );
+    } else if (wantIos && d.simulators.length) {
       answers.devices.ios.enabled = true;
       answers.devices.ios.deviceName = await u.askWithDefault(
         'Simulator name',
@@ -792,7 +808,10 @@ function collectTodos(cfg, d) {
     todos.push('app.build.android is empty: set the command that installs the flavor, or build by hand');
   }
   if (cfg.devices.ios.enabled && (!flavorCfg || !flavorCfg.iosBundleId)) {
-    todos.push(`app.flavors.${flavor || '<flavor>'}.iosBundleId is empty: set the simulator bundle id`);
+    todos.push(`app.flavors.${flavor || '<flavor>'}.iosBundleId is empty: set the iOS bundle id`);
+  }
+  if (cfg.devices.ios.enabled && cfg.devices.ios.realDevice && !cfg.devices.ios.teamId) {
+    todos.push('devices.ios.teamId is empty: a real iPhone needs your Apple team id to sign WebDriverAgent');
   }
   if (cfg.devices.android.enabled && !cfg.devices.android.avd) {
     todos.push('devices.android.avd is empty: name an emulator, or start one before the run');

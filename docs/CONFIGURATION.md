@@ -209,6 +209,14 @@ Leave `udid` empty and Appium picks the device. Set it only when several
 emulators run at once and you need to pin one. Set `avd` and the emulator is
 booted automatically if it is not already running.
 
+The `ios` profile drives a simulator by default. Set `realDevice: true` to
+drive a physical iPhone instead; Xcode 27's Device Hub manages both. A real
+device needs `udid` (from `xcrun devicectl list devices` or Device Hub) and
+`teamId`, your Apple developer team, so Appium can sign WebDriverAgent.
+`signingId` defaults to `Apple Development`, and `wdaBundleId` overrides
+WebDriverAgent's bundle id when the default is taken on your team. See
+[SETUP.md](SETUP.md#ios) for pairing the device.
+
 `newCommandTimeout` is in seconds and deliberately generous. A QC run
 interleaves device commands with reading source files, and a short timeout
 kills the session mid-pass, taking the screen recording with it.
@@ -245,6 +253,7 @@ Useful commands while filling this in:
 emulator -list-avds              # installed Android emulators
 adb devices                      # running devices and their serials
 xcrun simctl list devices        # iOS simulators
+xcrun devicectl list devices     # simulators and paired iPhones (Device Hub)
 ```
 
 ---

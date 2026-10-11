@@ -56,7 +56,18 @@ const DEFAULTS = {
     // so an unusual device can be accommodated without a schema change.
     android: { enabled: true, avd: '', udid: '', deviceName: 'Android Phone', caps: {} },
     android_tablet: { enabled: false, avd: '', udid: '', deviceName: 'Android Tablet', caps: {} },
-    ios: { enabled: false, deviceName: '', udid: '', caps: {} },
+    // realDevice drives a physical iPhone (Xcode 27 Device Hub lists both
+    // kinds). Appium then has to sign WebDriverAgent, hence the team fields.
+    ios: {
+      enabled: false,
+      deviceName: '',
+      udid: '',
+      realDevice: false,
+      teamId: '',
+      signingId: 'Apple Development',
+      wdaBundleId: '',
+      caps: {},
+    },
     appium: { host: '127.0.0.1', port: 4723, newCommandTimeout: 900 },
   },
   backend: {
@@ -279,7 +290,13 @@ function capsFor(profile, flavor) {
     if (!flavorCfg.iosBundleId) {
       throw new Error(
         `app.flavors.${flavorName}.iosBundleId is missing in ${CONFIG_FILE} ` +
-          '(required to drive an iOS simulator).',
+          '(required to drive an iOS device or simulator).',
+      );
+    }
+    if (device.realDevice && !device.udid) {
+      throw new Error(
+        `devices.ios.udid is required when devices.ios.realDevice is true in ${CONFIG_FILE}. ` +
+          'Find it with `xcrun devicectl list devices` or in Device Hub.',
       );
     }
     const caps = {
@@ -295,6 +312,12 @@ function capsFor(profile, flavor) {
     };
     if (device.deviceName) {caps['appium:deviceName'] = device.deviceName;}
     if (device.udid) {caps['appium:udid'] = device.udid;}
+    if (device.realDevice) {
+      // A physical device runs a signed WebDriverAgent; simulators need none of this.
+      if (device.teamId) {caps['appium:xcodeOrgId'] = device.teamId;}
+      caps['appium:xcodeSigningId'] = device.signingId || 'Apple Development';
+      if (device.wdaBundleId) {caps['appium:updatedWDABundleId'] = device.wdaBundleId;}
+    }
     return withOverrides(caps, device.caps);
   }
 

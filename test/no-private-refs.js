@@ -36,10 +36,12 @@ const ALLOWED_HOSTS = [
   'developer.android.com',
   'developer.apple.com',
   'your-org.atlassian.net', // the documented placeholder, not a real tenant
+  'mcp.atlassian.com', // Atlassian's public MCP endpoint, not a tenant
 ];
 
-// Package / bundle identifiers a public example may contain.
-const ALLOWED_PKG_PREFIXES = ['com.example.', 'io.appium.', 'com.android.', 'org.'];
+// Package / bundle identifiers a public example may contain. com.apple. covers
+// system apps such as Device Hub (com.apple.dt.Devices).
+const ALLOWED_PKG_PREFIXES = ['com.example.', 'io.appium.', 'com.android.', 'com.apple.', 'org.'];
 
 // Ticket prefixes used in documentation.
 const ALLOWED_TICKET_PREFIXES = ['ABC', 'PROJ', 'FULL', 'RUN', 'TICKET', 'ID', 'MD', 'JSON', 'API', 'UI', 'QC', 'DOD', 'TC', 'EN', 'AR', 'RTL', 'LTR', 'US', 'GB', 'PASS', 'FAIL', 'BLOCKED'];

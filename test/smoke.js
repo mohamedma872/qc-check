@@ -281,6 +281,34 @@ try {
     assert(/uat/.test(r.out), 'the error should list the known environments');
   });
 
+  check('a real iPhone gets signing capabilities, a simulator does not', () => {
+    const p = path.join(host, 'qc.config.json');
+    const cfg = JSON.parse(fs.readFileSync(p, 'utf8'));
+    for (const f of Object.values(cfg.app.flavors)) f.iosBundleId = 'com.example.app';
+    const configJs = path.join(host, 'qc', 'config.js');
+    const caps = () => JSON.parse(run([configJs, '--caps', 'ios'], { cwd: host }));
+
+    cfg.devices.ios = { enabled: true, deviceName: 'iPhone 17', udid: '' };
+    fs.writeFileSync(p, JSON.stringify(cfg, null, 2));
+    const sim = caps();
+    assert(!('appium:xcodeOrgId' in sim) && !('appium:xcodeSigningId' in sim), 'simulator caps carry signing');
+
+    cfg.devices.ios = { enabled: true, realDevice: true, deviceName: 'QA iPhone', udid: '', teamId: 'TEAM123456' };
+    fs.writeFileSync(p, JSON.stringify(cfg, null, 2));
+    const noUdid = runSoft([configJs, '--caps', 'ios'], { cwd: host });
+    assert(noUdid.status !== 0 && /udid/.test(noUdid.out), 'a real device without a udid should be refused');
+
+    cfg.devices.ios.udid = '00000000-0000000000000000';
+    fs.writeFileSync(p, JSON.stringify(cfg, null, 2));
+    const real = caps();
+    assert(real['appium:udid'] === cfg.devices.ios.udid, 'udid not passed');
+    assert(real['appium:xcodeOrgId'] === 'TEAM123456', 'team id not passed');
+    assert(real['appium:xcodeSigningId'] === 'Apple Development', 'signing id default missing');
+
+    cfg.devices.ios = { enabled: false, deviceName: '', udid: '' };
+    fs.writeFileSync(p, JSON.stringify(cfg, null, 2));
+  });
+
   check('install --agent wires up a slash command', () => {
     run([CLI, 'install', '--agent', 'claude', '--dir', host]);
     const dir = path.join(host, '.claude', 'skills', 'qc-check');

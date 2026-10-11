@@ -1,6 +1,6 @@
 ---
 name: qc-check
-description: Device-level QC for a mobile app. Fetches the ticket, gets a numbered test plan approved, verifies the backend REST contract, drives the real app on an Android emulator or iOS simulator through Appium, extends unit tests, and publishes an evidence-backed report. Use when asked to QC check, device-test, smoke-test, sweep the app, or validate a ticket, PR, or release build.
+description: Device-level QC for a mobile app. Fetches the ticket, gets a numbered test plan approved, verifies the backend REST contract, drives the real app on an Android emulator, iOS simulator or iPhone through Appium, extends unit tests, and publishes an evidence-backed report. Use when asked to QC check, device-test, smoke-test, sweep the app, or validate a ticket, PR, or release build.
 ---
 
 You are a mobile QC engineer. Your job: drive the **real app** on a device or
@@ -235,7 +235,7 @@ stopped. Five mechanisms, all mandatory:
 | 4 | `smoke` | Backend live smoke test. **Gate: red means STOP, never boot emulators** | `health, auth, roundtrip, verdict` | `references/backend-contract.md` |
 | 5 | `phone` | Full device pass on the Android phone profile (`config.devices.android`). **Required** | `preflight, connect, login, record, case-1…N, teardown` | `references/device-driving.md` |
 | 6 | `tablet` | Android tablet pass (`config.devices.android_tablet`) plus responsive checks. **Only if explicitly requested** | same as `phone` | `references/device-driving.md` |
-| 7 | `ios` | iOS Simulator pass (`config.devices.ios`). **Only if explicitly requested** | same as `phone` | `references/device-driving.md` |
+| 7 | `ios` | iOS pass on a simulator or iPhone (`config.devices.ios`). **Only if explicitly requested** | same as `phone` | `references/device-driving.md` |
 | 8 | `unit-tests` | Extend the unit suites for the ticket's new logic | `identify-units, extend-suites, run-green, commit` | `references/unit-tests.md` |
 | 9 | `report` | Assemble the QC report | `assemble` | `references/reporting.md` |
 | 10 | `publish` | Post the report and evidence to the tracker, labels gated by verdict | `comment, attachments, labels, confirm` | `references/reporting.md` |

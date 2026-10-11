@@ -20,7 +20,7 @@ Conventions used in this file:
 |---------|---------|-----------|
 | Android phone | `connect --platform android` (auto-boots `config.devices.android.avd`) | required, `config.devices.android.enabled` |
 | Android tablet | `connect --platform android_tablet` (auto-boots `config.devices.android_tablet.avd`) | only if requested, `config.devices.android_tablet.enabled` |
-| iOS Simulator | `connect --platform ios` (`config.devices.ios.deviceName` / `.udid`) | only if the user explicitly asked, or the change is iOS-specific, `config.devices.ios.enabled` |
+| iOS (simulator or iPhone) | `connect --platform ios` (`config.devices.ios.deviceName` / `.udid`; a physical iPhone when `config.devices.ios.realDevice` is true) | only if the user explicitly asked, or the change is iOS-specific, `config.devices.ios.enabled` |
 
 `connect` throws if that profile is disabled in the config. Do not ask which
 platform to run: assume phone only unless the user says otherwise.
@@ -58,7 +58,7 @@ command comes from the config, and a `{flavor}` in it is replaced with
 | Target | Key |
 |--------|-----|
 | Android phone and tablet | `config.app.build.android` |
-| iOS Simulator | `config.app.build.ios` |
+| iOS (simulator or iPhone) | `config.app.build.ios` |
 
 Run it from the host repo root with the target device already booted. **If the
 key is an empty string, do not guess a build command:** ask the user how to
@@ -112,11 +112,24 @@ Use `config.devices.appium.host` and `config.devices.appium.port` if they differ
 from the defaults above. `driver.js`, `dump-tree.js` and `record.sh` share one
 session record at `/tmp/qc-session.json`; set `QC_SESSION_FILE` to another path
 when two repos are QC'd side by side, and export it for every command in the
-pass, including `record.sh` and the iOS alert snippet below. iOS: `xcrun simctl list devices | grep Booted`, and
-check the booted simulator matches `config.devices.ios.deviceName` /
-`config.devices.ios.udid`. If `config.devices.<profile>.udid` is empty the driver
-lets Appium pick the single attached device, which is what you want on a
-one-emulator machine.
+pass, including `record.sh` and the iOS alert snippet below. iOS simulator:
+`xcrun simctl list devices | grep Booted`, and check the booted simulator
+matches `config.devices.ios.deviceName` / `config.devices.ios.udid`. If
+`config.devices.<profile>.udid` is empty the driver lets Appium pick the single
+attached device, which is what you want on a one-emulator machine.
+
+**iOS with Xcode 27 (Device Hub):** Simulator.app is gone; simulators and
+physical iPhones are both shown in Device Hub, and `xcrun devicectl list
+devices` lists both (its `Reality` column says `simulated` or `physical`).
+Never try `open -a Simulator`. To let the user watch a simulator pass, run
+`open -b com.apple.dt.Devices`. When `config.devices.ios.realDevice` is true,
+check the iPhone with that `udid` shows `connected` in `devicectl` before
+`connect`; if it does not, stop and ask the user to unlock it, plug it in and
+trust this Mac. The first session on a real device builds and signs
+WebDriverAgent, which can take several minutes: that is not a hang. A signing
+error names `config.devices.ios.teamId` as the fix; report it as a blocker owned
+by the user, do not edit the config yourself. A real device keeps its own
+state between runs, so log out at the end of the pass when a case logged in.
 
 **Android notes:**
 
