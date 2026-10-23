@@ -307,7 +307,28 @@ you are testing.
 | `auth.*` | How to obtain a bearer token. `tokenPath` is a dot-path into the login response, so `data.accessToken` reads `response.data.accessToken`. |
 | `extraBody` | Constant fields your login endpoint requires beyond username and password. |
 | `auth.sessionHeaders` | Header name to response dot-path, for a gateway that issues a per-session fingerprint or CSRF value at login. |
+| `auth.bodyEncoding` | `json` (default) or `form`. Use `form` for an OAuth token endpoint, which expects `application/x-www-form-urlencoded`. Put `grant_type` and `scope` in `extraBody`. |
+| `auth.headers` | Headers sent on the login request only, such as the OAuth client's `Authorization: Basic ...`. |
 | `headers` | Constant headers every request needs, such as a client id or an API version. Values may contain `{lang}` and `{version}`. |
+
+Values in `headers` and `auth.headers` can name a secret instead of holding
+it, so `qc.config.json` stays safe to commit. `${env:NAME}` reads an
+environment variable. `${file:env/dev.json#OAUTH_BASIC}` reads a key from a
+JSON file relative to the repo root, such as a gitignored file the app build
+already uses. A reference that does not resolve stops the request with an
+error naming it, and resolved values are masked in all output and saved files.
+
+An OAuth password grant, for example:
+
+```json
+"auth": {
+  "path": "/oauth/token",
+  "bodyEncoding": "form",
+  "extraBody": { "grant_type": "password", "scope": "basic" },
+  "headers": { "Authorization": "${file:env/dev.json#OAUTH_BASIC}" },
+  "tokenPath": "access_token"
+}
+```
 | `smokePath` | A cheap authenticated GET. Proves a real authenticated round trip, not just that a port is open. |
 
 Set `enabled: false` for an app with no backend of its own. The contract and

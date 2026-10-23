@@ -262,6 +262,76 @@ try {
     assert(/env/.test(out), 'env-var credentials not reported');
   });
 
+  check('a form-encoded login sends secret-referenced headers and masks them', () => {
+    const cfgPath = path.join(host, 'qc.config.json');
+    const original = fs.readFileSync(cfgPath, 'utf8');
+    const portFile = path.join(home, 'mock-port');
+    const logFile = path.join(home, 'mock-log.json');
+    fs.writeFileSync(path.join(host, 'secrets.json'), JSON.stringify({ BASIC: 'Basic c2VjcmV0LWNsaWVudA==' }));
+    // A stand-in OAuth server: it only issues a token for a form body carrying
+    // the referenced Basic header, then serves one Bearer-protected read.
+    const server = require('child_process').spawn(process.execPath, ['-e', `
+      const http = require('http'); const fs = require('fs');
+      const srv = http.createServer((req, res) => {
+        let body = ''; req.on('data', c => { body += c; });
+        req.on('end', () => {
+          fs.writeFileSync(${JSON.stringify(logFile)}, JSON.stringify({ url: req.url, headers: req.headers, body }));
+          if (req.url === '/oauth/token') {
+            const ok = req.headers['content-type'] === 'application/x-www-form-urlencoded'
+              && req.headers.authorization === 'Basic c2VjcmV0LWNsaWVudA=='
+              && req.headers['x-client'] === 'from-env'
+              && body === 'grant_type=password&scope=basic&username=qa&password=pw-secret';
+            res.writeHead(ok ? 200 : 400, { 'content-type': 'application/json' });
+            res.end(JSON.stringify(ok ? { access_token: 'tok-abcdef-123456' } : { error: 'bad login', body }));
+          } else {
+            const ok = req.headers.authorization === 'Bearer tok-abcdef-123456';
+            res.writeHead(ok ? 200 : 401, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ ok, seen: req.headers.authorization || null }));
+          }
+        });
+      });
+      srv.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portFile)}, String(srv.address().port)));
+    `], { stdio: 'ignore' });
+    try {
+      const deadline = Date.now() + 5000;
+      while (!fs.existsSync(portFile) && Date.now() < deadline) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+      }
+      assert(fs.existsSync(portFile), 'mock server did not start');
+      const port = fs.readFileSync(portFile, 'utf8');
+      const cfg = JSON.parse(original);
+      cfg.backend = {
+        ...cfg.backend,
+        enabled: true,
+        defaultEnv: 'uat',
+        baseUrls: { ...(cfg.backend && cfg.backend.baseUrls), uat: `http://127.0.0.1:${port}` },
+        smokePath: '/me',
+        auth: {
+          path: '/oauth/token',
+          bodyEncoding: 'form',
+          extraBody: { grant_type: 'password', scope: 'basic' },
+          headers: { Authorization: '${file:secrets.json#BASIC}', 'X-Client': '${env:QC_TEST_CLIENT}' },
+          tokenPath: 'access_token',
+        },
+      };
+      fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+      const env = { ...process.env, QC_ENV: 'uat', QC_TEST_CLIENT: 'from-env', QC_CRED_UAT_USERNAME: 'qa', QC_CRED_UAT_PASSWORD: 'pw-secret' };
+      const r = runSoft([path.join(host, 'qc', 'api.js'), '--smoke'], { cwd: host, env });
+      assert(r.status === 0, `smoke failed (exit ${r.status}): ${r.out.slice(0, 200)}`);
+      assert(/"ok": true/.test(r.out), 'authenticated read did not succeed');
+      for (const secret of ['c2VjcmV0LWNsaWVudA==', 'pw-secret', 'tok-abcdef-123456']) {
+        assert(!r.out.includes(secret), `a secret reached the output: ${secret.slice(0, 4)}...`);
+      }
+      delete env.QC_TEST_CLIENT;
+      const missing = runSoft([path.join(host, 'qc', 'api.js'), '--token'], { cwd: host, env });
+      assert(missing.status === 1 && /\$\{env:QC_TEST_CLIENT\} did not resolve/.test(missing.out), 'an unresolved reference was not refused');
+    } finally {
+      server.kill();
+      fs.writeFileSync(cfgPath, original);
+      fs.rmSync(path.join(host, 'secrets.json'), { force: true });
+    }
+  });
+
   check('a protected environment is refused without the flag', () => {
     const cfg = JSON.parse(fs.readFileSync(path.join(host, 'qc.config.json'), 'utf8'));
     cfg.app.flavors.prod = { androidPackage: 'com.example.app', iosBundleId: '' };

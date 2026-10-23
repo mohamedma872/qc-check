@@ -328,6 +328,19 @@
               "type": "object",
               "description": "Constant fields merged into the login body."
             },
+            "bodyEncoding": {
+              "type": "string",
+              "enum": ["json", "form"],
+              "default": "json",
+              "description": "How the login body is sent. form sends application/x-www-form-urlencoded, as OAuth token endpoints expect."
+            },
+            "headers": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Headers sent on the login request only, such as an OAuth client Basic header. Values may reference secrets with ${env:NAME} or ${file:path#KEY}."
+            },
             "sessionHeaders": {
               "type": "object",
               "additionalProperties": {

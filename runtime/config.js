@@ -83,6 +83,8 @@ const DEFAULTS = {
       passwordField: 'password',
       tokenPath: '',
       extraBody: {},
+      bodyEncoding: 'json',
+      headers: {},
     },
     headers: {},
     smokePath: '',

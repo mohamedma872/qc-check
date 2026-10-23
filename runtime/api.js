@@ -149,27 +149,65 @@ const APP_VERSION = repoPackageVersion();
 // a second language header) get them from backend.headers. {lang} and
 // {version} are substituted so a per-request value can live in a constant.
 function expand(value) {
-  return String(value).replace(/\{lang\}/g, LANG).replace(/\{version\}/g, APP_VERSION);
+  return resolveSecretRefs(String(value).replace(/\{lang\}/g, LANG).replace(/\{version\}/g, APP_VERSION));
 }
 
-function buildHeaders(data, auth) {
+// A header value may name a secret instead of holding it, so qc.config.json
+// stays safe to commit: ${env:NAME} reads an environment variable, and
+// ${file:path#KEY} reads KEY from a JSON file relative to the repo root (for
+// example a gitignored env/dev.json the app build already uses). Resolved
+// values are scrubbed from everything this script prints or saves.
+const REPO_ROOT = cfg.configPath ? path.dirname(cfg.configPath) : process.cwd();
+function resolveSecretRefs(text) {
+  return text.replace(/\$\{(env|file):([^}]+)\}/g, (ref, kind, target) => {
+    let value;
+    if (kind === 'env') {
+      value = process.env[target];
+    } else {
+      const [file, key] = target.split('#');
+      try {
+        value = dig(JSON.parse(fs.readFileSync(path.resolve(REPO_ROOT, file), 'utf8')), key || '');
+      } catch { value = undefined; }
+    }
+    if (value == null || value === '' || typeof value === 'object') {
+      console.error(`header reference ${ref} did not resolve: ${kind === 'env' ? 'set that environment variable' : 'check the file exists and holds that key'}`);
+      process.exit(1);
+    }
+    remember(String(value));
+    return String(value);
+  });
+}
+
+function buildHeaders(data, auth, opts) {
   const configured = {};
   for (const [k, v] of Object.entries(backend.headers || {})) { configured[k] = expand(v); }
+  const extra = {};
+  for (const [k, v] of Object.entries((opts && opts.headers) || {})) { extra[k] = expand(v); }
   return {
     Accept: 'application/json',
-    'Content-Type': 'application/json',
+    'Content-Type': (opts && opts.contentType) || 'application/json',
     'User-Agent': `qc-check-agent/${APP_VERSION}`,
     'Accept-Language': LANG,
     ...configured,
+    ...extra,
     ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}),
     ...(auth && auth.token ? { Authorization: `Bearer ${auth.token}` } : {}),
     ...(auth && auth.headers ? auth.headers : {}),
   };
 }
 
-function request(method, urlPath, body, auth) {
+// opts.form sends an object body as application/x-www-form-urlencoded (OAuth
+// token endpoints) instead of JSON. opts.headers apply to this request only.
+function request(method, urlPath, body, auth, opts) {
   return new Promise((resolve, reject) => {
-    const data = body == null ? null : (typeof body === 'string' ? body : JSON.stringify(body));
+    const form = Boolean(opts && opts.form);
+    const data = body == null ? null
+      : typeof body === 'string' ? body
+        : form ? new URLSearchParams(body).toString() : JSON.stringify(body);
+    const headerOpts = {
+      headers: opts && opts.headers,
+      contentType: form ? 'application/x-www-form-urlencoded' : undefined,
+    };
     let url;
     try { url = new URL(BASE + urlPath); } catch { reject(new Error(`bad URL: ${BASE}${urlPath}`)); return; }
     const transport = url.protocol === 'http:' ? http : https;
@@ -181,7 +219,7 @@ function request(method, urlPath, body, auth) {
         path: url.pathname + url.search,
         method,
         timeout: TIMEOUT_MS,
-        headers: buildHeaders(data, auth),
+        headers: buildHeaders(data, auth, headerOpts),
       },
       res => {
         let raw = '';
@@ -287,7 +325,12 @@ async function login() {
     [authCfg.usernameField || 'username']: username,
     [authCfg.passwordField || 'password']: password,
   };
-  const res = await request(method, loginPath, body, null);
+  const encoding = String(authCfg.bodyEncoding || 'json').toLowerCase();
+  if (!['json', 'form'].includes(encoding)) {
+    console.error(`backend.auth.bodyEncoding must be "json" or "form", not "${authCfg.bodyEncoding}"`);
+    process.exit(1);
+  }
+  const res = await request(method, loginPath, body, null, { form: encoding === 'form', headers: authCfg.headers });
   let token = resolveFromResponse(tokenPath, res);
   if (token) { token = String(token).replace(/^Bearer\s+/i, ''); }
   if (res.status >= 300 || !token) {
