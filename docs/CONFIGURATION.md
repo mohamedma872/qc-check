@@ -76,6 +76,26 @@ device pass. See [reporting](../skill/references/reporting.md).
 
 ---
 
+### Jira over REST
+
+Instead of agent tools, `tracker.rest` lets the bundled `qc/tracker.js` talk to
+Jira directly with an API token, so every run pulls the ticket fresh and
+publish works with any agent:
+
+```json
+"tracker": {
+  "kind": "jira",
+  "site": "your-org.atlassian.net",
+  "projectKey": "ABC",
+  "rest": { "enabled": true, "baseUrlEnv": "JIRA_BASE_URL", "emailEnv": "JIRA_EMAIL", "tokenEnv": "JIRA_API_TOKEN", "acceptanceField": "" }
+}
+```
+
+The three values live in environment variables (export them in your shell
+profile), never in this file. `node qc/tracker.js check` tests the login, and
+`qc-check doctor` reports missing variables. Set `acceptanceField` to a custom
+field id when your project keeps acceptance criteria outside the description.
+
 ## agent
 
 ```json

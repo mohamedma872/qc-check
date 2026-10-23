@@ -268,6 +268,16 @@ node -e "process.exit(require('./qc/config.js').validateTicket(process.argv[1])?
 
 Then fetch the ticket:
 
+- `config.tracker.kind` is `jira` **and** `config.tracker.rest.enabled` is
+  true: fetch it over REST, every run, and keep the copy with the run:
+  ```bash
+  node qc/tracker.js get ABC-123 --save   # writes <run>/ticket.md, prints the same markdown
+  ```
+  Read the description (and the acceptance-criteria field when
+  `config.tracker.rest.acceptanceField` is set) for the acceptance criteria,
+  linked issues such as backend sub-tasks and "blocked by", and design links.
+  Exit 2 means the Jira token in the environment was refused: stop and tell the
+  user which variable to fix. Never print it.
 - `config.tracker.kind` is `jira` or `github` **and**
   `config.tracker.tools.getIssue` is non-empty: call that tool by that exact
   name with the ticket ID, against `config.tracker.site` and
@@ -377,6 +387,7 @@ Publish degrades with the tracker:
 
 | `config.tracker.kind` and tools | Publish does |
 |---|---|
+| `jira` with `config.tracker.rest.enabled` | The same steps through `node qc/tracker.js`: `comment ABC-123 --file <run>/review.md`, `attach ABC-123 <run>/report.md <files>`, `labels ABC-123 --add <label> [--remove <label>]`, then confirm the write back to the user |
 | A tracker, and `config.tracker.tools.addComment` non-empty | Post `review.md` as a comment, attach `report.md` and the evidence with `config.tracker.tools.uploadAttachment`, apply `config.tracker.passLabel` or `config.tracker.blockedLabel` with `config.tracker.tools.addLabels` per the verdict, then confirm the write back to the user |
 | A tracker, but a tool name is empty | Do what is available. For the rest, print the exact text and file paths for the user to paste, and mark those sub-steps `skipped no <tool> configured` |
 | `none` | Nothing external to write. `set publish skipped no tracker configured`, then tell the user where the report and evidence are: `<run>/report.md`, `<run>/review.md` and the evidence folders beside it |

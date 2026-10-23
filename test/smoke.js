@@ -332,6 +332,73 @@ try {
     }
   });
 
+  check('jira over REST fetches, saves and publishes a ticket without leaking the token', () => {
+    const cfgPath = path.join(host, 'qc.config.json');
+    const original = fs.readFileSync(cfgPath, 'utf8');
+    const portFile = path.join(home, 'jira-port');
+    const logFile = path.join(home, 'jira-log.txt');
+    const server = require('child_process').spawn(process.execPath, ['-e', `
+      const http = require('http'); const fs = require('fs');
+      const ok = 'Basic ' + Buffer.from('qa@example.com:jira-secret-token').toString('base64');
+      const srv = http.createServer((req, res) => {
+        let body = ''; req.on('data', c => { body += c; });
+        req.on('end', () => {
+          fs.appendFileSync(${JSON.stringify(logFile)}, req.method + ' ' + req.url + ' ' + (req.headers['content-type'] || '') + '\\n');
+          const send = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(obj ? JSON.stringify(obj) : ''); };
+          if (req.headers.authorization !== ok) return send(401, { errorMessages: ['bad auth'] });
+          if (req.url === '/rest/api/3/myself') return send(200, { displayName: 'QA Bot' });
+          if (req.url.startsWith('/rest/api/3/issue/ABC-123?')) return send(200, { key: 'ABC-123', fields: {
+            summary: 'Apply a coupon', status: { name: 'In Progress' }, issuetype: { name: 'Story' },
+            description: { type: 'doc', content: [
+              { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'Acceptance Criteria' }] },
+              { type: 'bulletList', content: [{ type: 'listItem', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Coupon reduces the total' }] }] }] } ] },
+            issuelinks: [], subtasks: [], attachment: [] } });
+          if (req.url === '/rest/api/2/issue/ABC-123/comment' && req.method === 'POST') return send(201, { id: '42' });
+          if (req.url === '/rest/api/3/issue/ABC-123/attachments' && req.method === 'POST') return send(200, [{ id: '7' }]);
+          if (req.url === '/rest/api/3/issue/ABC-123' && req.method === 'PUT') return send(204);
+          send(404, { errorMessages: ['nope'] });
+        });
+      });
+      srv.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portFile)}, String(srv.address().port)));
+    `], { stdio: 'ignore' });
+    try {
+      const deadline = Date.now() + 5000;
+      while (!fs.existsSync(portFile) && Date.now() < deadline) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+      }
+      assert(fs.existsSync(portFile), 'mock jira did not start');
+      const cfg = JSON.parse(original);
+      cfg.tracker = { ...cfg.tracker, kind: 'jira', rest: { enabled: true, baseUrlEnv: 'QC_T_URL', emailEnv: 'QC_T_EMAIL', tokenEnv: 'QC_T_TOKEN' } };
+      fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+      const runDir = run([path.join(host, 'qc', 'runs.js'), 'open', 'ABC-123'], { cwd: host }).trim().split('\n').pop();
+      const env = { ...process.env, QC_RUN_DIR: runDir, QC_T_URL: `http://127.0.0.1:${fs.readFileSync(portFile, 'utf8')}`,
+        QC_T_EMAIL: 'qa@example.com', QC_T_TOKEN: 'jira-secret-token' };
+      const tr = a => runSoft([path.join(host, 'qc', 'tracker.js'), ...a], { cwd: host, env });
+      const all = [];
+      const checkOut = tr(['check']); all.push(checkOut.out);
+      assert(checkOut.status === 0 && /QA Bot/.test(checkOut.out), `check failed: ${checkOut.out.slice(0, 120)}`);
+      const got = tr(['get', 'abc-123', '--save']); all.push(got.out);
+      assert(got.status === 0, `get failed: ${got.out.slice(0, 160)}`);
+      const saved = fs.readFileSync(path.join(runDir, 'ticket.md'), 'utf8');
+      assert(/# ABC-123 - Apply a coupon/.test(saved) && /## Acceptance Criteria/.test(saved) && /- Coupon reduces the total/.test(saved), 'ticket.md is not the converted ticket');
+      const report = path.join(home, 'report.md'); fs.writeFileSync(report, 'QC Agent Report - ABC-123');
+      const c = tr(['comment', 'ABC-123', '--file', report]); all.push(c.out);
+      assert(c.status === 0 && /comment 42/.test(c.out), `comment failed: ${c.out.slice(0, 120)}`);
+      const at = tr(['attach', 'ABC-123', report]); all.push(at.out);
+      assert(at.status === 0, `attach failed: ${at.out.slice(0, 120)}`);
+      const lb = tr(['labels', 'ABC-123', '--add', 'QC-Agent-Pass', '--remove', 'BE-Blocking']); all.push(lb.out);
+      assert(lb.status === 0, `labels failed: ${lb.out.slice(0, 120)}`);
+      assert(/multipart\/form-data/.test(fs.readFileSync(logFile, 'utf8')), 'attachment was not sent as multipart');
+      const bad = runSoft([path.join(host, 'qc', 'tracker.js'), 'check'], { cwd: host, env: { ...env, QC_T_TOKEN: 'wrong-token' } });
+      all.push(bad.out);
+      assert(bad.status === 2, 'a refused token should exit 2');
+      assert(!all.join('\n').includes('jira-secret-token') && !all.join('\n').includes('wrong-token'), 'a token reached the output');
+    } finally {
+      server.kill();
+      fs.writeFileSync(cfgPath, original);
+    }
+  });
+
   check('a protected environment is refused without the flag', () => {
     const cfg = JSON.parse(fs.readFileSync(path.join(host, 'qc.config.json'), 'utf8'));
     cfg.app.flavors.prod = { androidPackage: 'com.example.app', iosBundleId: '' };

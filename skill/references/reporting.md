@@ -175,6 +175,11 @@ report and its evidence on disk in `<run>/`, and tell the user the run folder,
 the `report.md` and `summary.json` paths, plus the one-paragraph verdict. That
 is a complete, successful run.
 
+When `config.tracker.rest.enabled` is true (Jira over REST), every step below
+goes through `node qc/tracker.js` instead of a tool:
+`comment ABC-123 --file <run>/review.md`, `attach ABC-123 <run>/report.md <file>...`
+(several files per call is fine), and `labels ABC-123 --add <label> --remove <label>`.
+
 Otherwise the tool names come from the config and you call them as your agent
 calls tools (an MCP tool name, a CLI, or an HTTP call, depending on the host):
 

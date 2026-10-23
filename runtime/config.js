@@ -34,6 +34,8 @@ const DEFAULTS = {
     site: '',
     projectKey: '',
     tools: { getIssue: '', addComment: '', addLabels: '', uploadAttachment: '' },
+    // Jira over REST with an API token from the environment, instead of tools.
+    rest: { enabled: false, baseUrlEnv: 'JIRA_BASE_URL', emailEnv: 'JIRA_EMAIL', tokenEnv: 'JIRA_API_TOKEN', acceptanceField: '' },
     passLabel: 'QC-Agent-Pass',
     blockedLabel: 'BE-Blocking',
   },

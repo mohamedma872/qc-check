@@ -180,6 +180,15 @@ async function run(args) {
   const tracker = cfg.tracker || {};
   if (!tracker.kind || tracker.kind === 'none') {
     ok.push('tracker: none (publish is skipped, the report stays on disk)');
+  } else if (tracker.kind === 'jira' && tracker.rest && tracker.rest.enabled) {
+    const r = tracker.rest;
+    const envs = [r.baseUrlEnv || 'JIRA_BASE_URL', r.emailEnv || 'JIRA_EMAIL', r.tokenEnv || 'JIRA_API_TOKEN'];
+    const absent = envs.filter(n => !process.env[n]);
+    if (absent.length) {
+      fix.push(`tracker: jira over REST needs ${absent.join(', ')} in the environment (export them in your shell profile)`);
+    } else {
+      ok.push(`tracker: jira over REST (${envs.join(', ')} set; \`node qc/tracker.js check\` tests the login)`);
+    }
   } else {
     const unset = Object.entries(tracker.tools || {})
       .filter(([, v]) => !v)

@@ -93,6 +93,18 @@
             }
           }
         },
+        "rest": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Jira over REST (qc/tracker.js) instead of agent tools. Credentials come from environment variables, never from this file.",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "baseUrlEnv": { "type": "string", "default": "JIRA_BASE_URL", "description": "Env var holding the Jira site URL." },
+            "emailEnv": { "type": "string", "default": "JIRA_EMAIL", "description": "Env var holding the account email." },
+            "tokenEnv": { "type": "string", "default": "JIRA_API_TOKEN", "description": "Env var holding the API token." },
+            "acceptanceField": { "type": "string", "default": "", "description": "Custom field id holding acceptance criteria, e.g. customfield_10040. Empty: they are read from the description." }
+          }
+        },
         "passLabel": {
           "type": "string",
           "default": "QC-Agent-Pass",
