@@ -338,6 +338,11 @@ JSON file relative to the repo root, such as a gitignored file the app build
 already uses. A reference that does not resolve stops the request with an
 error naming it, and resolved values are masked in all output and saved files.
 
+`guestAuth` (optional) is a second login that needs no account, used by
+`node qc/api.js --guest` for guest-user flows, for example an OAuth
+`client_credentials` grant. It takes the same keys as `auth` minus the
+credential fields.
+
 An OAuth password grant, for example:
 
 ```json

@@ -22,6 +22,8 @@
 //   --lang <code>    Accept-Language, and substituted for {lang} in backend.headers
 //   --raw            print the raw body (compact, for piping)
 //   --unauth         skip login (route-existence probes: 401 means the route is deployed)
+//   --guest          log in with backend.guestAuth (e.g. an OAuth client_credentials
+//                    grant) instead of the environment's account
 //   --reveal         with --token only: print the token unmasked (never do this into a report)
 //   --timeout <ms>   per-request timeout (default 20000)
 //   --save <name>    also write the response, redacted, to the run's api/ folder
@@ -51,6 +53,7 @@ const HELP = [
   '  --lang <code>     Accept-Language; also replaces {lang} in backend.headers values',
   '  --raw             print the raw response body',
   '  --unauth          skip login (401 on a probe still proves the route is deployed)',
+  '  --guest           log in with backend.guestAuth (no account), for guest-user flows',
   '  --reveal          print the full token with --token (unsafe for logs and reports)',
   '  --timeout <ms>    per-request timeout, default 20000',
   '  --save <name>     with GET/POST/PUT/PATCH/DELETE, --smoke or --health: write the',
@@ -308,7 +311,32 @@ function credentialBlock() {
   return creds;
 }
 
+// A guest session: backend.guestAuth describes a login that needs no account
+// (typically an OAuth client_credentials grant). Same keys as backend.auth,
+// minus the credential fields.
+async function guestLogin() {
+  const g = backend.guestAuth || {};
+  const loginPath = g.path || authCfg.path;
+  const tokenPath = g.tokenPath || authCfg.tokenPath;
+  if (!loginPath || !tokenPath) {
+    console.error('--guest needs backend.guestAuth.path and tokenPath (or backend.auth ones) in qc.config.json');
+    process.exit(1);
+  }
+  const method = String(g.method || 'POST').toUpperCase();
+  const res = await request(method, loginPath, { ...(g.extraBody || {}) }, null,
+    { form: String(g.bodyEncoding || 'json').toLowerCase() === 'form', headers: g.headers });
+  let token = resolveFromResponse(tokenPath, res);
+  if (token) { token = String(token).replace(/^Bearer\s+/i, ''); }
+  if (res.status >= 300 || !token) {
+    console.error(`AUTHFAIL (HTTP ${res.status}) on guest ${method} ${loginPath}: ${redact(String(res.raw).slice(0, 300))}`);
+    process.exit(2);
+  }
+  remember(token);
+  return { token, headers: {} };
+}
+
 async function login() {
+  if (args.includes('--guest')) { return guestLogin(); }
   const loginPath = authCfg.path;
   const tokenPath = authCfg.tokenPath;
   // Defaulting these would send credentials to a guessed route, so demand them.

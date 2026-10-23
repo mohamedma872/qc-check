@@ -362,6 +362,10 @@
             }
           }
         },
+        "guestAuth": {
+          "type": "object",
+          "description": "Optional login that needs no account, used by api.js --guest (e.g. an OAuth client_credentials grant). Keys as in auth: path, method, bodyEncoding, extraBody, headers, tokenPath."
+        },
         "headers": {
           "type": "object",
           "additionalProperties": {

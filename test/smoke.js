@@ -280,7 +280,8 @@ try {
             const ok = req.headers['content-type'] === 'application/x-www-form-urlencoded'
               && req.headers.authorization === 'Basic c2VjcmV0LWNsaWVudA=='
               && req.headers['x-client'] === 'from-env'
-              && body === 'grant_type=password&scope=basic&username=qa&password=pw-secret';
+              && (body === 'grant_type=password&scope=basic&username=qa&password=pw-secret'
+                || body === 'grant_type=client_credentials&scope=basic');
             res.writeHead(ok ? 200 : 400, { 'content-type': 'application/json' });
             res.end(JSON.stringify(ok ? { access_token: 'tok-abcdef-123456' } : { error: 'bad login', body }));
           } else {
@@ -322,6 +323,13 @@ try {
       for (const secret of ['c2VjcmV0LWNsaWVudA==', 'pw-secret', 'tok-abcdef-123456']) {
         assert(!r.out.includes(secret), `a secret reached the output: ${secret.slice(0, 4)}...`);
       }
+      cfg.backend.guestAuth = { bodyEncoding: 'form', extraBody: { grant_type: 'client_credentials', scope: 'basic' },
+        headers: { Authorization: '${file:secrets.json#BASIC}', 'X-Client': '${env:QC_TEST_CLIENT}' } };
+      fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+      const guestEnv = { ...env }; delete guestEnv.QC_CRED_UAT_USERNAME; delete guestEnv.QC_CRED_UAT_PASSWORD;
+      const g = runSoft([path.join(host, 'qc', 'api.js'), '--guest', '--smoke'], { cwd: host, env: guestEnv });
+      assert(g.status === 0 && /"ok": true/.test(g.out), `guest smoke failed (exit ${g.status}): ${g.out.slice(0, 160)}`);
+      assert(!g.out.includes('tok-abcdef-123456') && !g.out.includes('c2VjcmV0LWNsaWVudA=='), 'a guest secret reached the output');
       delete env.QC_TEST_CLIENT;
       const missing = runSoft([path.join(host, 'qc', 'api.js'), '--token'], { cwd: host, env });
       assert(missing.status === 1 && /\$\{env:QC_TEST_CLIENT\} did not resolve/.test(missing.out), 'an unresolved reference was not refused');
