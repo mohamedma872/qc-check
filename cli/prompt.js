@@ -30,6 +30,7 @@ const REFERENCES = [
   ['test-plan', 'test-plan.md'],
   ['contract / smoke', 'backend-contract.md'],
   ['phone / tablet / ios', 'device-driving.md'],
+  ['baseline (each device FAIL)', 'baseline.md'],
   ['unit-tests', 'unit-tests.md'],
   ['report / publish', 'reporting.md'],
   ['full sweep mode', 'full-sweep.md'],

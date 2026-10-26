@@ -44,9 +44,12 @@ Recordings: recordings/001-phone.mp4[ · recordings/002-tablet.mp4] (attached to
 | TC1 | ... | PASS / FAIL / BLOCKED | screenshots/004-tc1-saved.png, api/002-tc1-readback.json |
 
 (Numbering mirrors the approved plan, plan.md. Add a
-Tablet/iOS column when those passes ran. FAIL: Expected vs Actual. BLOCKED: the
+Tablet/iOS column when those passes ran. FAIL: Expected vs Actual, plus the
+baseline verdict from `references/baseline.md`: "new in this PR", "already on
+<base>", "worse in this PR", or "baseline not checked (<reason>)". BLOCKED: the
 blocker and whose scope it is. A requested form factor that could not be built
-or booted is BLOCKED, not a pass.)
+or booted is BLOCKED, not a pass. `Repro:` cases come from the code review: a
+FAIL there confirms the predicted bug, a PASS disproves it.)
 
 ## Definition of Done
 | # | Done means | Status |
@@ -59,11 +62,14 @@ board)
 ## Unit tests
 - PASS: extended <Suite> (+N cases), covers <...>, `<config.codeMap.testCommand> <pattern>` green
 - YELLOW: <new logic> left to device QC (no unit test), reason
+- RED (expected): [QC-REPRO ABC-123] <name> fails with <actual vs expected>, on branch qc-repro/ABC-123-<slug> (red until the bug is fixed; see `references/unit-tests.md`)
 
 ## Findings
 - RED Backend: <exact status and body of the failing route, e.g. POST /v1/vehicle returns 404 on staging>, needs fix or redeploy
 - YELLOW Code quality: <Component> missing testIDs or a11y labels, suggested ids
 - YELLOW QC tooling: <driver gap encountered>
+- RED App: <bug seen on device>, confirms code-review finding "<short text>"; baseline: new in this PR
+- YELLOW Code review, not reproduced: <predicted bug>, TC<n> passed / could not be run (reason)
 
 ## Overall: PASS / FAIL / BLOCKED - [brief verdict + next step]
 
@@ -117,21 +123,33 @@ work, what must change before merge, and how to see the problem themselves.
   is no internet"), not what the code does. Put the priority in brackets after
   the title, using one of these words: `(must fix)`, `(please fix)`,
   `(minor)`, `(heads-up)`.
-- **Under each title, at most three short parts:**
-  - what happens, from the user's side, including how to reproduce it if
-    that is not obvious;
+- **Under each title, at most four short parts:**
+  - what happens, from the user's side, in one or two sentences;
+  - *How to reproduce:* 1 to 3 numbered steps the developer can follow on
+    their own phone, starting from a screen they can find ("Open any category
+    list", not "launch with `~plp-screen`"). Include how to force the
+    condition in plain words ("turn on airplane mode", "tap Save twice
+    quickly"), and end with what to look for. **Required on every must-fix
+    item;** optional elsewhere, and leave it out when the title already says
+    it all;
   - *Why:* one line naming the cause, with at most one file or function name
-    so the developer can find it;
+    so the developer can find it. Add the baseline verdict at the end of this
+    line when it is known: "New in this PR.", "Already on <base>, not caused
+    by this PR." or "Also on <base>, but worse in this PR." (see
+    `references/baseline.md`). When a failing unit test shows the bug, say
+    where in one clause ("a failing test is on branch `qc-repro/...`");
   - *Suggestion:* one line with the fix.
 - **Split the list when there is a merge gate:** a "Must fix before merge"
   group first, then "Worth fixing", then a "Waiting on backend" or "Heads-up"
-  group for things outside the PR's control.
+  group for things outside the PR's control. A bug that is already on
+  `<base>` goes under "Worth fixing", not "Must fix", unless the PR was meant
+  to fix it.
 - **Plain words over internal terms.** Say "spinner", "product page", "the
   list mixes up results", not `DialogRoute`, `PdpBloc`, `hasReachedMax`. One
   code identifier per item at most, in backticks, only where it helps someone
   find the code. No test-case ids (`TC7`), DoD ids, run ids, sub-step names,
   evidence paths or cost lines; those stay in `report.md`.
-- **Short.** Aim for under about 30 lines. If a finding needs more, it belongs
+- **Short.** Aim for under about 30 lines, not counting the reproduce steps. If a finding needs more, it belongs
   in `report.md`, and the comment points there.
 - **Name only what you observed or verified.** Mark code-review findings you
   did not reproduce on a device as such ("may", "from the code"), and say what
@@ -150,8 +168,12 @@ Tested on <device> with the <env> build. **<One sentence: what works.>**
 <There are N problems to fix before merging: | A few things to improve:>
 
 **1. <What the user sees>** (must fix)
-<What happens, and how to reproduce it in one line.>
-*Why:* <cause, with at most one `file` or `function`>.
+<What happens, in one or two sentences.>
+*How to reproduce:*
+1. <Open a screen anyone can find.>
+2. <Force the condition, in plain words.>
+3. <Do the action; look for the symptom.>
+*Why:* <cause, with at most one `file` or `function`>. <New in this PR. | Already on <base>, not caused by this PR. | Also on <base>, but worse in this PR.>
 *Suggestion:* <the fix>.
 
 **2. <...>** (minor)
@@ -198,9 +220,12 @@ calls tools (an MCP tool name, a CLI, or an HTTP call, depending on the host):
    file: `<run>/report.md`, the per-case screenshots (the report's Evidence
    column, from `<run>/screenshots/`) and the session recordings in
    `<run>/recordings/`. Attach `api/` files only when a finding needs them.
-   Tokens and credentials are redacted, but a response body can still carry
-   secrets (a config endpoint that returns API keys, for example), so open each
-   one first and never attach a file that holds a key. Note in the sub-step
+   Tokens and credentials are redacted, and body values under secret-looking
+   keys (`apiKey`, `secret`, `token`, `siteKey`, `{key, value}` config entries
+   named like one, plus `config.backend.redactKeys`) are saved as a short
+   prefix and length, such as `f8c8…(32)`. That masking goes by key name, so a
+   secret under an innocent name still gets through: open each file first and
+   never attach one that holds a full key. Note in the sub-step
    which files landed. If uploads are unavailable, say so and keep the paths in
    the comment.
 
