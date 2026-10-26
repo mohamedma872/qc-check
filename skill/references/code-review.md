@@ -32,6 +32,28 @@ what you have, and list the files you did not read as a yellow finding
 ("code review covered X of Y files"). The review feeds the device pass; it
 does not replace it.
 
+## 0. Static leads first (part of `read-diff`)
+
+```bash
+node qc/review-scan.js --save        # base: repo.defaultBranch; --base <ref> for a release branch; --lint adds the linter
+```
+
+It reads only the lines this branch added and prints **leads** in six groups:
+`owasp` (secrets, cleartext/TLS bypass, sensitive logs, plain storage,
+WebView, exported components, weak crypto, deep-link input, dependency
+changes, each tagged with its OWASP Mobile Top 10 id), `perf`, `memory`,
+`concurrency`, `standards` (lint, debug leftovers, TODOs, size) and
+`architecture` (layer imports from `config.review.layers`, or the built-in
+data/domain/presentation rules). `--save` keeps `<run>/review/scan.json` and
+`scan.md`. Secret values are always masked; never unmask one into a report.
+
+The rules are regexes with a little brace counting, so **a lead is not a
+finding**. Open every lead you keep in the code (section 1) and record it only
+when the code confirms it, with what the user would see (section 2). Drop the
+rest without a finding. A noisy rule for this repo goes into
+`config.review.disable`. Say in the `read-diff` step how many you kept, e.g.
+`... step code-review read-diff pass 12 files, 23 scan leads, 4 confirmed`.
+
 ## 1. `read-diff` - read what changed, in context
 
 ```bash

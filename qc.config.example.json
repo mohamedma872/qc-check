@@ -115,6 +115,21 @@
     "typecheckCommand": "npx tsc --noEmit --skipLibCheck",
     "testsGitignored": false
   },
+  "review": {
+    "lintCommand": "",
+    "layers": [
+      {
+        "name": "screens-use-hooks",
+        "files": "src/screens/**",
+        "mustNotImport": ["src/api/services/**"],
+        "why": "screens go through the query/mutation hooks, not the API services."
+      }
+    ],
+    "disable": [],
+    "maxFileLines": 600,
+    "maxFunctionLines": 80,
+    "httpClientDirs": ["src/api"]
+  },
   "budget": {
     "currency": "USD",
     "runCap": 30
