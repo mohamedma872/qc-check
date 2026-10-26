@@ -26,6 +26,7 @@ const { resolveEnv, guardProtected, runKey, peekRun, buildFor, isProtected } = r
 
 // The phase documents SKILL.md tells the agent to read when it gets there.
 const REFERENCES = [
+  ['code-review', 'code-review.md'],
   ['test-plan', 'test-plan.md'],
   ['contract / smoke', 'backend-contract.md'],
   ['phone / tablet / ios', 'device-driving.md'],

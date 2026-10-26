@@ -43,7 +43,14 @@ concrete steps, and a single expected result. Cover:
 - one case per additional entry in `config.project.locales` when the ticket
   touches UI, including the mirrored-layout check for `config.project.rtlLocales`;
 - offline behaviour when relevant;
-- the end-to-end persistence case(s).
+- the end-to-end persistence case(s);
+- **every "Repro:" case from the `code-review` phase,** one TC each, keeping
+  the `Repro:` prefix in the name and the expected result written as the
+  correct behaviour. Look them up in the findings log
+  (`node qc/state.js ABC-123 get`, the "from code review, not yet reproduced"
+  entries) if you are resuming. Do not drop one because it seems unlikely:
+  the point is to try. A repro case you cannot run on a device goes to
+  "Out of scope" with the reason, and to the unit-tests DoD row.
 
 Cases run on the Android phone. Add Tablet / iOS columns only when those passes
 were requested (`-` where not applicable). A case you cannot make concrete
@@ -69,6 +76,7 @@ Environment: <env> · Branch: <branch> · PR: #<n> · Backend: <config.backend.b
 | # | Test case | Steps (selectors) | Expected | Phone |
 |---|-----------|-------------------|----------|:-----:|
 | TC1 | <name> | tap `~apply-button` -> ... | <single observable result> | pending |
+| TC7 | Repro: <risky sequence from code review> | <how to force it> -> ... | <the correct behaviour> | pending |
 
 Legend: pending · PASS · FAIL · BLOCKED · n/a for this form factor
 
@@ -86,8 +94,8 @@ phases edit these cells in place.
 
 ## 4. `approval` - HARD GATE: the user must approve
 
-1. Post a short summary to the user: the environment, DoD count, case count,
-   what is covered, anything you flagged out of scope, plus the path of
+1. Post a short summary to the user: the environment, DoD count, case count
+   (and how many are code-review repro cases), what is covered, anything you flagged out of scope, plus the path of
    `<run>/plan.md` so they can open it.
 2. **Ask the user and wait for an answer**: *"Approve the QC test plan for
    ABC-123?"* with the options **Approve** and **Request changes** (their notes
