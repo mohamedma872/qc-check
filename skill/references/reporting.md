@@ -70,6 +70,15 @@ board)
 - YELLOW QC tooling: <driver gap encountered>
 - RED App: <bug seen on device>, confirms code-review finding "<short text>"; baseline: new in this PR
 - YELLOW Code review, not reproduced: <predicted bug>, TC<n> passed / could not be run (reason)
+- RED Performance: <flow> probe failed: <metric> <value> vs <threshold> on <build type>; base build <value>; new in this PR
+- YELLOW Security (OWASP M<n> <name>): <what is exposed and where>, <file>; suggestion
+- YELLOW Memory: <screen> leak loop grew <n> MB over <times> visits (base <n> MB) / <controller> never disposed in <file>
+- YELLOW Concurrency, not reproduced: <race>, <file>:<function>
+- YELLOW Code standards: <n> new lint issues on added lines (<rules>), <files>
+- YELLOW Architecture: <layer rule> broken by <n> new imports (<files>); the codebase already has <n>
+
+Use these prefixes so every finding names its review area. One finding per
+rule for standards and architecture, with the files listed, not one per line.
 
 ## Overall: PASS / FAIL / BLOCKED - [brief verdict + next step]
 
@@ -179,9 +188,26 @@ Tested on <device> with the <env> build. **<One sentence: what works.>**
 **2. <...>** (minor)
 <...>
 
+**Code health** (from reading the code; none of these break the feature today):
+- **Security:** <OWASP category in plain words, e.g. "the login token is stored unencrypted">, `<file>`. <Suggestion.>
+- **Performance:** <e.g. "the new list builds every item up front; with 200 items it stutters">. <Suggestion.>
+- **Memory:** <e.g. "the scroll listener is never removed, so each visit to the page leaks it">. <Suggestion.>
+- **Concurrency:** <e.g. "a fast second tap on Apply starts a second request; the slower one wins">. <Suggestion.>
+- **Code standards:** <e.g. "3 new analyzer warnings and a leftover print">. <Files.>
+- **Architecture:** <e.g. "the cart screen imports the data layer directly (the codebase has 34 of these already; please don't add more)">.
+
 **Waiting on backend:**
 <What is missing on <env>, and what needs a re-test once it lands.>
 ```
+
+The **Code health** group lists only the review areas that have a verified
+finding; leave the others out rather than writing "none". A code-health item
+that was reproduced on device or failed a probe (a leak loop that grew, a
+race that showed the wrong result) is not code health any more: it moves up
+to a numbered problem with *How to reproduce*. Write each item as the effect
+on users or on the next developer, not as the rule name: "the token is
+stored unencrypted", not "M9 insecure storage". Keep the OWASP id for
+`report.md`.
 
 When the run passed with nothing to fix, the comment is two lines: the verdict
 sentence and "No issues found." Do not pad it.

@@ -44,8 +44,8 @@ concrete steps, and a single expected result. Cover:
   touches UI, including the mirrored-layout check for `config.project.rtlLocales`;
 - offline behaviour when relevant;
 - the end-to-end persistence case(s);
-- **every "Repro:" case from the `code-review` phase,** one TC each, keeping
-  the `Repro:` prefix in the name and the expected result written as the
+- **every "Repro:" and "Probe:" case from the `code-review` phase,** one TC each, keeping
+  the `Repro:` or `Probe:` prefix in the name and the expected result written as the
   correct behaviour. Look them up in the findings log
   (`node qc/state.js ABC-123 get`, the "from code review, not yet reproduced"
   entries) if you are resuming. Do not drop one because it seems unlikely:
@@ -77,6 +77,7 @@ Environment: <env> · Branch: <branch> · PR: #<n> · Backend: <config.backend.b
 |---|-----------|-------------------|----------|:-----:|
 | TC1 | <name> | tap `~apply-button` -> ... | <single observable result> | pending |
 | TC7 | Repro: <risky sequence from code review> | <how to force it> -> ... | <the correct behaviour> | pending |
+| TC8 | Probe: <screen> leak loop / <flow> jank | `leak-loop --steps "..." --times 10` / `perf --reset` -> flow -> `perf --label <name>` | under the `config.perf` threshold, and no worse than the base build | pending |
 
 Legend: pending · PASS · FAIL · BLOCKED · n/a for this form factor
 

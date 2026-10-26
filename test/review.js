@@ -218,16 +218,16 @@ try {
     assert(/resume at: code-review/.test(r.out), `resume line: ${r.out.split('\n').pop()}`);
   });
 
-  check('code-review seeds read-diff, risks, repro-cases', () => {
+  check('code-review seeds read-diff, scan, risks, repro-cases', () => {
     const r = state(['set', 'code-review', 'in_progress']);
     assert(r.status === 0, `code-review in_progress was refused: ${r.out.slice(0, 160)}`);
     const steps = Object.keys(stateJson().phases['code-review'].steps);
-    assert(steps.join(',') === 'read-diff,risks,repro-cases', `steps: ${steps.join(',')}`);
+    assert(steps.join(',') === 'read-diff,scan,risks,repro-cases', `steps: ${steps.join(',')}`);
     assert(/resume at: code-review\/read-diff/.test(state(['get']).out), 'resume point should name the sub-step');
   });
 
   check('code-review needs no approval: steps and pass work before test-plan', () => {
-    for (const s of ['read-diff', 'risks', 'repro-cases']) {
+    for (const s of ['read-diff', 'scan', 'risks', 'repro-cases']) {
       const r = state(['step', 'code-review', s, 'pass']);
       assert(r.status === 0, `step ${s} refused: ${r.out.slice(0, 160)}`);
     }

@@ -53,7 +53,7 @@ const UNRESOLVED = ['pending', 'in_progress', 'fail'];
 const DEVICE_STEPS = ['preflight', 'connect', 'login', 'record', 'cases', 'teardown'];
 const DEFAULT_STEPS = {
   ticket: ['derive-id', 'fetch-ticket', 'read-code'],
-  'code-review': ['read-diff', 'risks', 'repro-cases'],
+  'code-review': ['read-diff', 'scan', 'risks', 'repro-cases'],
   'test-plan': ['dod', 'test-cases', 'write-md', 'approval'],
   contract: ['identify-write', 'be-ref', 'live-check', 'verdict'],
   smoke: ['health', 'auth', 'roundtrip', 'verdict'],

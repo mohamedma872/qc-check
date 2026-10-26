@@ -233,7 +233,7 @@ stopped. Five mechanisms, all mandatory:
 | # | Phase (`state.js` name) | What | Default sub-steps | Read first |
 |---|---|---|---|---|
 | 1 | `ticket` | Get the ticket ID and fetch the ticket (or the pull request) | `derive-id, fetch-ticket, read-code` | below |
-| 2 | `code-review` | Review the PR diff for correctness risks (state and lifecycle, error paths, pagination, races, null handling, security). Log each as a finding "from code review, not yet reproduced" and turn it into a `Repro:` case for the plan. No approval needed | `read-diff, risks, repro-cases` | `references/code-review.md` |
+| 2 | `code-review` | Review the PR diff for correctness plus six areas: security (OWASP Mobile Top 10), performance, memory leaks, concurrency, code standards, architecture. `review-scan.js` finds the mechanical leads; verify each. Risks become `Repro:` cases, perf and memory risks become `Probe:` cases, standards and architecture go straight to the report. No approval needed | `read-diff, scan, risks, repro-cases` | `references/code-review.md` |
 | 3 | `test-plan` | Write DoD and numbered test cases to `<run>/plan.md`, including every code-review repro case. **Gate: THE USER MUST APPROVE before anything below runs** | `dod, test-cases, write-md, approval` | `references/test-plan.md` |
 | 4 | `contract` | Verify the app-to-backend REST contract: code, backend ticket, live gateway | `identify-write, be-ref, live-check, verdict` | `references/backend-contract.md` |
 | 5 | `smoke` | Backend live smoke test. **Gate: red means STOP, never boot emulators** | `health, auth, roundtrip, verdict` | `references/backend-contract.md` |
@@ -337,10 +337,15 @@ the build under test: stop and fix that before any device phase. Never
 
 ### Phase 2: code review (before the plan)
 
-Follow `references/code-review.md`. Using the diff from `read-code`, look for
-correctness risks, record each as a yellow finding marked "from code review,
-not yet reproduced", and turn each into a `Repro:` test case the plan must
-include. No approval is needed for this phase. Skip it only when there is no
+Follow `references/code-review.md`. Using the diff from `read-code`, run
+`node qc/review-scan.js --base <base> --lint --save` for the mechanical leads,
+then review the diff for correctness and for the six areas: security (OWASP
+Mobile Top 10), performance, memory leaks, concurrency, code standards and
+architecture. Record each verified risk as a yellow finding that starts with
+its area key. Turn correctness and concurrency risks into `Repro:` cases and
+performance and memory risks into `Probe:` cases (`driver.js perf`, `mem`,
+`leak-loop`, `startup`), all of which the plan must include. Code standards
+and architecture findings need no test case. No approval is needed for this phase. Skip it only when there is no
 diff (full sweep, or no code change): `set code-review skipped <reason>`.
 
 ### Phase 3: test plan (DoD and test cases; hard user-approval gate)
