@@ -168,6 +168,34 @@
         "prCommand": {
           "type": "string",
           "description": "Command that opens a pull request, for example \"gh pr create --fill\". Empty means derive from the git remote and print the URL instead of opening one."
+        },
+        "host": {
+          "type": "string",
+          "enum": ["", "github", "bitbucket", "none"],
+          "default": "",
+          "description": "Where pull requests live, for `qc-check run pr <n>` and PR review comments (runtime/pr.js). github uses the gh CLI; bitbucket uses the Bitbucket Cloud REST API. Empty detects it from the git remote."
+        },
+        "remote": {
+          "type": "string",
+          "default": "origin",
+          "description": "The git remote whose URL names the PR host, the owner or workspace, and the repository. build.js also fetches branches from it."
+        },
+        "bitbucket": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Bitbucket Cloud basic auth. Holds the NAMES of environment variables, never their values.",
+          "properties": {
+            "emailEnv": {
+              "type": "string",
+              "default": "BITBUCKET_EMAIL",
+              "description": "Environment variable holding the Atlassian account email."
+            },
+            "tokenEnv": {
+              "type": "string",
+              "default": "BITBUCKET_API_TOKEN",
+              "description": "Environment variable holding an Atlassian API token with pull request read (and, to comment, write) scope."
+            }
+          }
         }
       }
     },
@@ -198,6 +226,17 @@
             },
             "ios": {
               "type": "string"
+            },
+            "worktreeDir": {
+              "type": "string",
+              "default": "",
+              "description": "Where runtime/build.js keeps one git worktree per branch under test, relative to the repo root or absolute. Empty means a per-repo folder in the OS temp dir. It must not be the repository or a parent of it."
+            },
+            "copyFiles": {
+              "type": "array",
+              "items": { "type": "string" },
+              "default": [],
+              "description": "Gitignored files (or folders) the build needs, copied from the main checkout into each worktree, for example [\"env/dev.json\"]. They are never committed."
             }
           }
         },

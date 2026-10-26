@@ -21,7 +21,9 @@ const {
   listIosRealDevices,
   appiumStatus,
   pkgVersion,
+  tryExec,
 } = require('./util');
+const repoHost = require('../runtime/repo-host');
 
 function help() {
   info(`qc-check doctor - check the environment and configuration.
@@ -194,6 +196,43 @@ async function run(args) {
       .filter(([, v]) => !v)
       .map(([k]) => k);
     ok.push(`tracker: ${tracker.kind}${unset.length ? ` (not wired: ${unset.join(', ')})` : ''}`);
+  }
+
+  // ------------------------------------------------------- pull requests
+  // Only `qc-check run pr` and PR comments need this, so a gap is reported as
+  // "not ready for PR runs" rather than failing the whole check.
+  const repo = cfg.repo || {};
+  const remoteName = repo.remote || 'origin';
+  const remoteUrl = tryExec('git', ['remote', 'get-url', remoteName], { cwd: host });
+  const remote = remoteUrl.ok ? repoHost.parseRemote(remoteUrl.stdout) : null;
+  let prHost = 'none';
+  try {
+    prHost = repoHost.resolveHost(repo.host, remote).kind;
+  } catch (err) {
+    fix.push(err.message);
+  }
+  if (prHost === 'github') {
+    ok.push(
+      which('gh')
+        ? `pull requests: github ${remote ? remote.slug : ''} via gh (\`gh auth status\` checks the login)`
+        : 'pull requests: github, but gh is not on PATH, so `qc-check run pr` will not work (brew install gh)',
+    );
+  } else if (prHost === 'bitbucket') {
+    const bb = repo.bitbucket || {};
+    const names = [bb.emailEnv || 'BITBUCKET_EMAIL', bb.tokenEnv || 'BITBUCKET_API_TOKEN'];
+    const absent = names.filter((n) => !process.env[n]);
+    ok.push(
+      absent.length
+        ? `pull requests: bitbucket ${remote ? remote.slug : ''}, but ${absent.join(', ')} not set, so \`qc-check run pr\` will not work`
+        : `pull requests: bitbucket ${remote ? remote.slug : ''} (${names.join(', ')} set)`,
+    );
+  } else {
+    ok.push(`pull requests: no supported host on remote "${remoteName}" (\`qc-check run pr\` needs GitHub or Bitbucket Cloud)`);
+  }
+  for (const rel of ((cfg.app && cfg.app.build && cfg.app.build.copyFiles) || [])) {
+    if (!fs.existsSync(path.resolve(host, rel))) {
+      fix.push(`app.build.copyFiles lists ${rel}, which is not in this checkout, so a worktree build will miss it.`);
+    }
   }
 
   // ---------------------------------------------------------- credentials

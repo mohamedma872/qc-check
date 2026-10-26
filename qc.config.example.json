@@ -31,7 +31,10 @@
     "timeoutMinutes": 180
   },
   "repo": {
-    "defaultBranch": "main"
+    "defaultBranch": "main",
+    "host": "",
+    "remote": "origin",
+    "bitbucket": { "emailEnv": "BITBUCKET_EMAIL", "tokenEnv": "BITBUCKET_API_TOKEN" }
   },
   "app": {
     "defaultFlavor": "staging",
@@ -39,7 +42,9 @@
     "envBanner": "",
     "build": {
       "android": "yarn android:{flavor}",
-      "ios": "yarn ios:{flavor}"
+      "ios": "yarn ios:{flavor}",
+      "worktreeDir": "",
+      "copyFiles": ["env/{flavor}.json"]
     },
     "flavors": {
       "staging": {
