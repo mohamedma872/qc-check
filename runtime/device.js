@@ -1,7 +1,8 @@
 // QC - device helpers for driver.js: pure logic (argument parsing, adb shell
-// quoting, serial selection, logcat counting, health parsing, the testID audit)
-// plus thin adb wrappers. The pure parts take plain strings and return plain
-// values so test/driver.js can check them with no device attached.
+// quoting, serial selection, logcat counting, health parsing, the testID audit,
+// frame / memory / startup parsing for the perf probes) plus thin adb wrappers.
+// The pure parts take plain strings and return plain values so test/driver.js
+// and test/perf.js can check them with no device attached.
 'use strict';
 
 const { execFileSync } = require('child_process');
@@ -433,6 +434,359 @@ function inputTarget({ selector, class: cls, x, y, index, within }) {
   return { kind: 'selector', selector, index: idx, within, label: selector };
 }
 
+// --- performance and memory probes ------------------------------------------------------
+
+function median(values) {
+  const xs = (values || []).filter(v => v !== null && v !== '').map(Number).filter(n => Number.isFinite(n)).sort((a, b) => a - b);
+  if (!xs.length) {return null;}
+  const mid = Math.floor(xs.length / 2);
+  return xs.length % 2 ? xs[mid] : (xs[mid - 1] + xs[mid]) / 2;
+}
+
+// Nearest-rank percentile of a list of numbers.
+function percentile(values, p) {
+  const xs = values.slice().sort((a, b) => a - b);
+  if (!xs.length) {return null;}
+  const rank = Math.ceil((p / 100) * xs.length);
+  return xs[Math.min(xs.length, Math.max(1, rank)) - 1];
+}
+
+// `dumpsys gfxinfo <pkg>`: the frame stats HWUI keeps for the app's views.
+// Lines like "Janky frames (legacy):" and "Number Frame deadline missed
+// (legacy):" (API 31+) are kept apart from the current ones; anything the
+// platform does not print is null.
+function parseGfxinfo(text) {
+  const s = String(text || '');
+  if (/No process found for/i.test(s)) {return { noProcess: true };}
+  const num = re => {
+    const m = re.exec(s);
+    return m ? Number(m[1]) : null;
+  };
+  const head = /\*\* Graphics info for pid (\d+) \[([^\]]+)\]/.exec(s);
+  const janky = /^Janky frames: (\d+) \(([\d.]+)%\)/m.exec(s);
+  const out = {
+    noProcess: false,
+    pid: head ? Number(head[1]) : null,
+    pkg: head ? head[2] : null,
+    totalFrames: num(/^Total frames rendered: (\d+)/m),
+    jankyFrames: janky ? Number(janky[1]) : null,
+    jankyPct: janky ? Number(janky[2]) : null,
+    p50Ms: num(/^50th percentile: (\d+)ms/m),
+    p90Ms: num(/^90th percentile: (\d+)ms/m),
+    p95Ms: num(/^95th percentile: (\d+)ms/m),
+    p99Ms: num(/^99th percentile: (\d+)ms/m),
+    missedVsync: num(/^Number Missed Vsync: (\d+)/m),
+    highInputLatency: num(/^Number High input latency: (\d+)/m),
+    slowUiThread: num(/^Number Slow UI thread: (\d+)/m),
+    slowBitmapUploads: num(/^Number Slow bitmap uploads: (\d+)/m),
+    slowIssueDrawCommands: num(/^Number Slow issue draw commands: (\d+)/m),
+    frameDeadlineMissed: num(/^Number Frame deadline missed: (\d+)/m),
+    gpuP90Ms: num(/^90th gpu percentile: (\d+)ms/m),
+    pipeline: (/^Pipeline=(.+)$/m.exec(s) || [])[1] || null,
+  };
+  // A SurfaceView in the app's buffers means the content is drawn outside
+  // HWUI (Flutter, games, video), so gfxinfo undercounts it.
+  out.surfaceView = /SurfaceView\[/.test(s);
+  // An empty histogram reports its top bucket (4950ms) for every percentile.
+  if (out.totalFrames === 0) {
+    for (const k of ['p50Ms', 'p90Ms', 'p95Ms', 'p99Ms', 'gpuP90Ms']) {out[k] = null;}
+  }
+  if (out.totalFrames === null) {out.unparsed = true;}
+  return out;
+}
+
+// Layer names from `dumpsys SurfaceFlinger --list`. API 34+ prints
+// "RequestedLayerState{<name> parentId=..}"; older releases print bare names.
+function parseSfLayers(text) {
+  return String(text || '').split('\n').map(l => l.trim()).filter(Boolean).map(l => {
+    const m = /^RequestedLayerState\{(.*?)(?: parentId=| z=|\}$)/.exec(l);
+    return m ? m[1] : l;
+  }).filter(n => !/^(Display |Output Layer|\d+ Layers?)/.test(n));
+}
+
+// The layer that carries the app's frames: a SurfaceView buffer layer
+// (Flutter renders there), else the app window's buffer layer.
+function pickSfLayer(names, pkg) {
+  const mine = names.filter(n => n.includes(pkg) && !/^Background for|ActivityRecord|InputSink|^Bounds for/.test(n));
+  return mine.find(n => n.includes('SurfaceView[') && n.includes('(BLAST)'))
+    || mine.find(n => n.includes('SurfaceView[') && !n.includes('Background'))
+    || mine.find(n => n.includes('(BLAST)'))
+    || mine.find(n => /^VRI-|^[0-9a-f]+ .*\/.*#\d+$/.test(n))
+    || mine[0] || null;
+}
+
+// `dumpsys SurfaceFlinger --latency <layer>`: the refresh period, then up to
+// 128 rows of desired-present / actual-present / frame-ready times (ns).
+// Frame time is the gap between consecutive presents; gaps over idleMs are
+// the screen sitting still, not frames, and are left out. A frame is janky
+// when it took longer than 1.5 refresh periods (at least one missed vsync).
+function parseSfLatency(text, { idleMs = 500 } = {}) {
+  const lines = String(text || '').trim().split('\n').map(l => l.trim()).filter(Boolean);
+  const refreshNs = Number(lines.shift());
+  const presents = [];
+  for (const l of lines) {
+    const cols = l.split(/\s+/).map(Number);
+    if (cols.length < 3 || cols.some(n => !Number.isFinite(n) || n <= 0 || n > 1e18)) {continue;}
+    presents.push(cols[1]);
+  }
+  presents.sort((a, b) => a - b);
+  const frameMs = [];
+  for (let i = 1; i < presents.length; i++) {
+    const ms = (presents[i] - presents[i - 1]) / 1e6;
+    if (ms > 0 && ms <= idleMs) {frameMs.push(ms);}
+  }
+  const refreshMs = refreshNs > 0 ? refreshNs / 1e6 : 16.67;
+  const janky = frameMs.filter(ms => ms > refreshMs * 1.5).length;
+  const round = n => (n === null ? null : Math.round(n * 10) / 10);
+  return {
+    source: 'surfaceflinger',
+    refreshMs: round(refreshMs),
+    totalFrames: frameMs.length,
+    jankyFrames: janky,
+    jankyPct: frameMs.length ? Math.round((janky / frameMs.length) * 10000) / 100 : null,
+    p50Ms: round(percentile(frameMs, 50)),
+    p90Ms: round(percentile(frameMs, 90)),
+    p95Ms: round(percentile(frameMs, 95)),
+    p99Ms: round(percentile(frameMs, 99)),
+  };
+}
+
+// Verdict on frame stats: 'insufficient' under minFrames, else 'fail' when
+// jank % or the 90th percentile is over its limit, else 'ok'.
+function judgePerf(stats, { maxJankPct = 10, maxP90Ms = 32, minFrames = 10 } = {}) {
+  if (!stats || stats.noProcess) {return { verdict: 'insufficient', reasons: ['the app is not running'] };}
+  const frames = stats.totalFrames || 0;
+  if (frames < minFrames) {
+    return { verdict: 'insufficient', reasons: [`only ${frames} frame(s) recorded (need ${minFrames})`] };
+  }
+  const reasons = [];
+  if (stats.jankyPct !== null && stats.jankyPct > maxJankPct) {
+    reasons.push(`janky frames ${stats.jankyPct}% > ${maxJankPct}%`);
+  }
+  if (stats.p90Ms !== null && stats.p90Ms > maxP90Ms) {
+    reasons.push(`90th percentile ${stats.p90Ms}ms > ${maxP90Ms}ms`);
+  }
+  return { verdict: reasons.length ? 'fail' : 'ok', reasons };
+}
+
+const MEM_SUMMARY_KEYS = {
+  'Java Heap': 'javaHeap',
+  'Native Heap': 'nativeHeap',
+  Code: 'code',
+  Stack: 'stack',
+  Graphics: 'graphics',
+  'Private Other': 'privateOther',
+  System: 'system',
+};
+
+const MEM_OBJECT_KEYS = {
+  Views: 'views',
+  ViewRootImpl: 'viewRootImpl',
+  AppContexts: 'appContexts',
+  Activities: 'activities',
+  Assets: 'assets',
+  AssetManagers: 'assetManagers',
+  'Local Binders': 'localBinders',
+  'Proxy Binders': 'proxyBinders',
+  'Parcel memory': 'parcelMemory',
+  'Parcel count': 'parcelCount',
+  'Death Recipients': 'deathRecipients',
+  WebViews: 'webViews',
+};
+
+// The lines of one indented section of meminfo ("App Summary", "Objects"),
+// up to the next section header.
+function memSection(lines, title) {
+  const start = lines.findIndex(l => l.trim() === title);
+  if (start < 0) {return [];}
+  const out = [];
+  for (let i = start + 1; i < lines.length; i++) {
+    const t = lines[i].trim();
+    if (t && !t.includes(':') && !/^[-\s]+$/.test(t) && !/^(Pss|Rss|Count)/.test(t) && !/\(KB\)/.test(t)) {break;}
+    out.push(lines[i]);
+  }
+  return out;
+}
+
+// `dumpsys meminfo <pkg>`: the App Summary (KB) and Objects counts. Handles
+// API 30+ ("TOTAL PSS: .. TOTAL RSS: .. TOTAL SWAP PSS: ..") and the older
+// "TOTAL: .. TOTAL SWAP PSS: .." line. On Android a Flutter app's Dart heap
+// is not in Java Heap: it lands in Native Heap / Private Other ("Unknown").
+function parseMeminfo(text) {
+  const s = String(text || '');
+  if (/No process found for/i.test(s)) {return { noProcess: true };}
+  const lines = s.split('\n');
+  const head = /\*\* MEMINFO in pid (\d+) \[([^\]]+)\]/.exec(s);
+  const summary = {};
+  for (const l of memSection(lines, 'App Summary')) {
+    const m = /^\s*([A-Za-z ]+):\s+(\d+)/.exec(l);
+    if (m && MEM_SUMMARY_KEYS[m[1].trim()]) {summary[MEM_SUMMARY_KEYS[m[1].trim()]] = Number(m[2]);}
+    const pss = /TOTAL PSS:\s+(\d+)/.exec(l) || /^\s*TOTAL:\s+(\d+)/.exec(l);
+    if (pss) {summary.totalPss = Number(pss[1]);}
+    const rss = /TOTAL RSS:\s+(\d+)/.exec(l);
+    if (rss) {summary.totalRss = Number(rss[1]);}
+    const swap = /TOTAL SWAP(?: PSS| \(KB\)):\s+(\d+)/.exec(l);
+    if (swap) {summary.totalSwapPss = Number(swap[1]);}
+  }
+  const objects = {};
+  for (const l of memSection(lines, 'Objects')) {
+    const re = /([A-Za-z][A-Za-z ]*?):\s+(\d+)/g;
+    let m;
+    while ((m = re.exec(l))) {
+      const key = MEM_OBJECT_KEYS[m[1].trim()];
+      if (key) {objects[key] = Number(m[2]);}
+    }
+  }
+  // Without an App Summary (very old releases), the TOTAL row of the table.
+  if (summary.totalPss === undefined) {
+    const t = /^\s*TOTAL\s+(\d+)/m.exec(s);
+    if (t) {summary.totalPss = Number(t[1]);}
+  }
+  const out = { noProcess: false, pid: head ? Number(head[1]) : null, pkg: head ? head[2] : null, summary, objects };
+  if (summary.totalPss === undefined) {out.unparsed = true;}
+  return out;
+}
+
+// The object counts whose growth over a repeated flow means a leaked screen.
+const LEAK_OBJECTS = ['activities', 'viewRootImpl', 'appContexts'];
+
+// Deltas from snapshot a to b (KB and counts). Fails when TOTAL PSS grew more
+// than maxGrowthMb, more than maxGrowthPct (when set), or an Activity /
+// ViewRootImpl / AppContext count grew.
+function compareMem(a, b, { maxGrowthMb = 25, maxGrowthPct = null } = {}) {
+  const sa = (a && a.summary) || {};
+  const sb = (b && b.summary) || {};
+  const oa = (a && a.objects) || {};
+  const ob = (b && b.objects) || {};
+  const keys = [...Object.values(MEM_SUMMARY_KEYS), 'totalPss', 'totalRss', 'totalSwapPss'];
+  const summary = keys.filter(k => sa[k] !== undefined && sb[k] !== undefined)
+    .map(k => ({ key: k, before: sa[k], after: sb[k], delta: sb[k] - sa[k] }));
+  const objects = Object.values(MEM_OBJECT_KEYS).filter(k => oa[k] !== undefined && ob[k] !== undefined)
+    .map(k => ({ key: k, before: oa[k], after: ob[k], delta: ob[k] - oa[k] }));
+  const reasons = [];
+  let growthKb = null;
+  let growthPct = null;
+  if (sa.totalPss !== undefined && sb.totalPss !== undefined) {
+    growthKb = sb.totalPss - sa.totalPss;
+    growthPct = sa.totalPss ? Math.round((growthKb / sa.totalPss) * 1000) / 10 : null;
+    const mb = growthKb / 1024;
+    if (maxGrowthMb !== null && maxGrowthMb !== undefined && mb > maxGrowthMb) {
+      reasons.push(`TOTAL PSS grew ${mb.toFixed(1)} MB > ${maxGrowthMb} MB`);
+    }
+    if (maxGrowthPct !== null && maxGrowthPct !== undefined && growthPct !== null && growthPct > maxGrowthPct) {
+      reasons.push(`TOTAL PSS grew ${growthPct}% > ${maxGrowthPct}%`);
+    }
+  } else {
+    reasons.push('TOTAL PSS missing from a snapshot');
+  }
+  for (const o of objects) {
+    if (LEAK_OBJECTS.includes(o.key) && o.delta > 0) {
+      reasons.push(`${o.key} grew ${o.before} -> ${o.after} (leaked screen?)`);
+    }
+  }
+  // TOTAL PSS counts swapped pages on recent releases, so a device under
+  // memory pressure moves the number without the app allocating anything.
+  const notes = [];
+  if (sa.totalSwapPss !== undefined && sb.totalSwapPss !== undefined) {
+    const swapMb = (sb.totalSwapPss - sa.totalSwapPss) / 1024;
+    if (Math.abs(swapMb) > 10) {
+      notes.push(`swap changed by ${swapMb > 0 ? '+' : ''}${swapMb.toFixed(1)} MB between the snapshots (device memory pressure); check TOTAL RSS too and re-measure with fewer apps running`);
+    }
+  }
+  return { failed: reasons.length > 0, reasons, notes, growthKb, growthPct, summary, objects };
+}
+
+// `am start -W`: Status, LaunchState, TotalTime / WaitTime (ms). A timeout
+// prints no TotalTime; a warm delivery to a running activity prints 0.
+function parseAmStartW(text) {
+  const s = String(text || '');
+  const num = re => {
+    const m = re.exec(s);
+    return m ? Number(m[1]) : null;
+  };
+  const err = /^(Error[^\n]*)/m.exec(s);
+  return {
+    status: (/^Status: (\S+)/m.exec(s) || [])[1] || null,
+    launchState: (/^LaunchState: (\w+)/m.exec(s) || [])[1] || null,
+    activity: (/^Activity: (\S+)/m.exec(s) || [])[1] || null,
+    totalTime: num(/^TotalTime: (\d+)/m),
+    waitTime: num(/^WaitTime: (\d+)/m),
+    thisTime: num(/^ThisTime: (\d+)/m),
+    delivered: /delivered to currently running top-most instance/i.test(s),
+    error: err ? err[1].trim() : null,
+  };
+}
+
+// The resumed (foreground) activity's component from `dumpsys activity
+// activities`: "topResumedActivity=ActivityRecord{1199 u0 com.x/.Main t2}"
+// (API 29+) or "mResumedActivity: ActivityRecord{..}" (older). Null if none.
+function parseResumedActivity(text) {
+  const m = /(?:topResumedActivity|mResumedActivity|ResumedActivity)\s*[=:]\s*ActivityRecord\{\S+ u\d+ (\S+)/.exec(String(text || ''));
+  return m ? m[1] : null;
+}
+
+// `dumpsys package <pkg>` says DEBUGGABLE in pkgFlags for a debug build.
+function isDebuggable(text) {
+  return /(?:pkgFlags|flags)=\[[^\]]*\bDEBUGGABLE\b/.test(String(text || ''));
+}
+
+// "open-url --url 'https://example.com/p/1?a=b;c'; back" -> [['open-url','--url','https://example.com/p/1?a=b;c'], ['back']].
+// Steps split on ';' and words on whitespace, both outside single or double
+// quotes; a backslash outside single quotes escapes the next character.
+function splitSteps(str) {
+  const steps = [];
+  let words = [];
+  let word = '';
+  let inWord = false;
+  let quote = null;
+  const s = String(str || '');
+  const endWord = () => {
+    if (inWord) {words.push(word);}
+    word = '';
+    inWord = false;
+  };
+  const endStep = () => {
+    endWord();
+    if (words.length) {steps.push(words);}
+    words = [];
+  };
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (quote) {
+      if (c === quote) {quote = null;}
+      else if (c === '\\' && quote === '"' && i + 1 < s.length) {word += s[++i];}
+      else {word += c;}
+    } else if (c === '"' || c === "'") {
+      quote = c;
+      inWord = true;
+    } else if (c === '\\' && i + 1 < s.length) {
+      word += s[++i];
+      inWord = true;
+    } else if (c === ';') {
+      endStep();
+    } else if (/\s/.test(c)) {
+      endWord();
+    } else {
+      word += c;
+      inWord = true;
+    }
+  }
+  if (quote) {throw new Error(`unterminated ${quote} quote in steps`);}
+  endStep();
+  return steps;
+}
+
+// Android key names `key --code` accepts besides a number or KEYCODE_*.
+const KEY_CODES = { BACK: 4, HOME: 3, ENTER: 66, MENU: 82, TAB: 61, DEL: 67, APP_SWITCH: 187, ESCAPE: 111, SEARCH: 84 };
+
+function keyEventArg(code) {
+  const c = String(code || '').trim().toUpperCase();
+  if (/^\d+$/.test(c)) {return c;}
+  if (KEY_CODES[c] !== undefined) {return String(KEY_CODES[c]);}
+  if (/^KEYCODE_[A-Z0-9_]+$/.test(c)) {return c;}
+  return null;
+}
+
 module.exports = {
   parseArgs,
   shellQuote,
@@ -458,4 +812,19 @@ module.exports = {
   auditAndroid,
   auditIOS,
   inputTarget,
+  median,
+  percentile,
+  parseGfxinfo,
+  parseSfLayers,
+  pickSfLayer,
+  parseSfLatency,
+  judgePerf,
+  parseMeminfo,
+  compareMem,
+  LEAK_OBJECTS,
+  parseAmStartW,
+  isDebuggable,
+  parseResumedActivity,
+  splitSteps,
+  keyEventArg,
 };

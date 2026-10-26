@@ -1293,6 +1293,579 @@ async function cmdAuditIds() {
   console.log(`OK: audit done (${missing.length} without an id)`);
 }
 
+// --- Performance and memory probes (Android) -------------------------------------------
+
+// Exit codes shared by perf / mem --compare / startup / leak-loop:
+//   0 OK within limits, 3 FAIL over a limit (a finding), 2 WARN not enough data
+//   (or not supported here), 1 the probe itself could not run.
+const EXIT_FINDING = 3;
+const EXIT_WARN = 2;
+
+// The perf/mem/startup commands read adb dumpsys, so they are Android-only.
+function androidOnly(ctx, what) {
+  if (!ctx.isIOS) {return;}
+  console.warn(`WARN: ${what} reads adb dumpsys and is Android-only. On iOS profile with Xcode Instruments (Time Profiler, Allocations, Leaks) by hand.`);
+  process.exit(EXIT_WARN);
+}
+
+function pkgOrExit(ctx) {
+  if (!ctx.pkg) {
+    console.error(`ERROR: app.flavors.${ctx.flavor}.androidPackage is not set in qc.config.json`);
+    process.exit(1);
+  }
+  return ctx.pkg;
+}
+
+// `adb shell <cmd>` output, stdout and stderr together even on a non-zero exit:
+// dumpsys says "No process found" that way.
+function shellOut(serial, cmd, timeout = 30000) {
+  try {
+    return String(device.adb(serial, ['shell', cmd], { timeout }));
+  } catch (err) {
+    if (err.stdout === undefined && err.stderr === undefined) {throw err;}
+    return `${err.stdout || ''}${err.stderr || ''}`;
+  }
+}
+
+// Limits from config.perf, each overridden by its flag.
+function perfLimit(ctx, opts, flag, key) {
+  const raw = opts[flag];
+  if (raw !== undefined && raw !== true) {
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) {
+      console.error(`ERROR: --${flag} needs a number, got "${raw}"`);
+      process.exit(1);
+    }
+    return n;
+  }
+  const cfgPerf = ctx.cfg.perf || {};
+  return cfgPerf[key];
+}
+
+function labelOrExit(raw, flag = 'label') {
+  if (raw === undefined) {return null;}
+  if (typeof raw !== 'string' || !/^[A-Za-z0-9._-]+$/.test(raw)) {
+    console.error(`ERROR: --${flag} takes letters, digits, . _ or - (got "${raw === true ? '' : raw}")`);
+    process.exit(1);
+  }
+  return raw;
+}
+
+// <run>/perf: QC_RUN_DIR as given, else the run in progress. Null with no run.
+function perfDir({ create = true } = {}) {
+  let dir = null;
+  const fromEnv = process.env.QC_RUN_DIR;
+  if (fromEnv && fs.existsSync(fromEnv)) {
+    dir = fromEnv;
+  } else {
+    // eslint-disable-next-line global-require
+    const run = require('./runs.js').currentRun();
+    dir = run && run.dir;
+  }
+  if (!dir) {return null;}
+  const p = path.join(dir, 'perf');
+  if (create) {fs.mkdirSync(p, { recursive: true });}
+  return p;
+}
+
+function savePerf(kind, label, data) {
+  if (!label) {return null;}
+  const dir = perfDir();
+  if (!dir) {
+    console.warn(`WARN: no QC run in progress (QC_RUN_DIR), so ${kind}-${label}.json was not saved.`);
+    return null;
+  }
+  const file = path.join(dir, `${kind}-${label}.json`);
+  fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`);
+  console.log(`   saved: ${file}`);
+  return file;
+}
+
+function loadPerf(kind, label) {
+  const dir = perfDir({ create: false });
+  if (!dir) {
+    console.error(`ERROR: no QC run in progress (QC_RUN_DIR), so there is no saved ${kind}-${label}.json to compare.`);
+    process.exit(1);
+  }
+  const file = path.join(dir, `${kind}-${label}.json`);
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    console.error(`ERROR: ${file} not found. Save it first with: mem --gc --label ${label}`);
+    process.exit(1);
+  }
+  return null;
+}
+
+function debuggable(serial, pkg) {
+  try {
+    return device.isDebuggable(shellOut(serial, `dumpsys package ${device.shellQuote(pkg)}`, 20000));
+  } catch {
+    return false;
+  }
+}
+
+// The foreground activity's component, or null.
+function resumedActivity(serial) {
+  try {
+    return device.parseResumedActivity(shellOut(serial, 'dumpsys activity activities | grep -E "ResumedActivity"', 20000));
+  } catch {
+    return null;
+  }
+}
+
+function appPid(serial, pkg) {
+  const out = shellOut(serial, `pidof ${device.shellQuote(pkg)}`, 10000).trim();
+  return /^\d+/.test(out) ? Number(out.split(/\s+/)[0]) : null;
+}
+
+function fmt(n, unit = '') {
+  return n === null || n === undefined ? '-' : `${n}${unit}`;
+}
+
+// perf --reset | perf [--label n] [--max-jank pct] [--max-p90 ms] [--source gfxinfo|surfaceflinger]
+async function cmdPerf(opts) {
+  const ctx = deviceContext(opts);
+  androidOnly(ctx, 'perf');
+  const pkg = pkgOrExit(ctx);
+  const serial = serialOrExit(ctx);
+  const q = device.shellQuote(pkg);
+
+  if (opts.reset === true) {
+    const out = shellOut(serial, `dumpsys gfxinfo ${q} reset`);
+    if (/No process found/i.test(out)) {
+      console.error(`ERROR: ${pkg} is not running on ${serial}; launch it, then reset.`);
+      process.exit(1);
+    }
+    // Clears SurfaceFlinger's per-layer frame history too (stats only).
+    shellOut(serial, 'dumpsys SurfaceFlinger --latency-clear');
+    console.log(`OK: frame stats reset for ${pkg} on ${serial}; exercise the screen, then run perf`);
+    return;
+  }
+
+  const source = typeof opts.source === 'string' ? opts.source : 'gfxinfo';
+  if (!['gfxinfo', 'surfaceflinger'].includes(source)) {
+    console.error('ERROR: --source is gfxinfo (default) or surfaceflinger');
+    process.exit(1);
+  }
+  const label = labelOrExit(opts.label);
+  const limits = {
+    maxJankPct: perfLimit(ctx, opts, 'max-jank', 'maxJankPct'),
+    maxP90Ms: perfLimit(ctx, opts, 'max-p90', 'maxP90Ms'),
+  };
+
+  let stats;
+  if (source === 'surfaceflinger') {
+    const layers = device.parseSfLayers(shellOut(serial, 'dumpsys SurfaceFlinger --list'));
+    const layer = device.pickSfLayer(layers, pkg);
+    if (!layer) {
+      console.error(`ERROR: no SurfaceFlinger layer for ${pkg} on ${serial}. Is it on screen?`);
+      process.exit(1);
+    }
+    stats = device.parseSfLatency(shellOut(serial, `dumpsys SurfaceFlinger --latency ${device.shellQuote(layer)}`));
+    stats.layer = layer;
+  } else {
+    stats = device.parseGfxinfo(shellOut(serial, `dumpsys gfxinfo ${q}`));
+    if (stats.noProcess) {
+      console.error(`ERROR: ${pkg} is not running on ${serial}.`);
+      process.exit(1);
+    }
+    if (stats.unparsed) {
+      console.error('ERROR: could not read "Total frames rendered" from dumpsys gfxinfo.');
+      process.exit(1);
+    }
+    stats.source = 'gfxinfo';
+  }
+  const debug = debuggable(serial, pkg);
+  const judged = device.judgePerf(stats, limits);
+
+  console.log(`   ${pkg} on ${serial} (source: ${stats.source}${stats.layer ? `, layer ${stats.layer}` : ''})${debug ? ' [debug build]' : ''}`);
+  console.log(`   frames: ${fmt(stats.totalFrames)}  janky: ${fmt(stats.jankyFrames)} (${fmt(stats.jankyPct, '%')})`);
+  console.log(`   percentiles: p50 ${fmt(stats.p50Ms, 'ms')}  p90 ${fmt(stats.p90Ms, 'ms')}  p95 ${fmt(stats.p95Ms, 'ms')}  p99 ${fmt(stats.p99Ms, 'ms')}`);
+  if (stats.source === 'gfxinfo') {
+    console.log(`   missed vsync: ${fmt(stats.missedVsync)}  high input latency: ${fmt(stats.highInputLatency)}  slow UI thread: ${fmt(stats.slowUiThread)}`);
+    console.log(`   slow bitmap uploads: ${fmt(stats.slowBitmapUploads)}  slow draw commands: ${fmt(stats.slowIssueDrawCommands)}  frame deadline missed: ${fmt(stats.frameDeadlineMissed)}`);
+  } else {
+    console.log(`   refresh: ${stats.refreshMs}ms; jank = a frame over 1.5 refresh periods (approximate, idle gaps excluded)`);
+  }
+
+  const record = { kind: 'gfx', label, at: new Date().toISOString(), serial, pkg, debuggable: debug, limits, verdict: judged.verdict, reasons: judged.reasons, stats };
+  savePerf('gfx', label, record);
+
+  if (judged.verdict === 'insufficient') {
+    console.warn(`WARN: not enough data - ${judged.reasons.join('; ')}.`);
+    if (stats.source === 'gfxinfo') {
+      console.warn('   gfxinfo counts frames drawn by Android views (HWUI). A Flutter app draws through its own raster');
+      console.warn('   thread into a SurfaceView, so gfxinfo sees few or none of its frames. Try:');
+      console.warn(`     node ${process.argv[1]} perf --source surfaceflinger   (after perf --reset and the interaction)`);
+      console.warn('   or profile with `flutter run --profile` + DevTools (Performance view).');
+    } else {
+      console.warn('   Run perf --reset, then scroll or animate the screen for a few seconds, then perf again.');
+    }
+    process.exitCode = EXIT_WARN;
+    return;
+  }
+  if (stats.source === 'gfxinfo' && stats.surfaceView) {
+    console.warn('WARN: the app draws into a SurfaceView (Flutter?): gfxinfo covers only the Android views, not that surface. Cross-check with --source surfaceflinger.');
+  }
+  if (judged.verdict === 'fail' && debug) {
+    console.warn(`WARN: over the limits (${judged.reasons.join('; ')}), but on a debug build (JIT, asserts): indicative only. Measure a profile or release build before filing it.`);
+    process.exitCode = EXIT_WARN;
+    return;
+  }
+  if (judged.verdict === 'fail') {
+    console.error(`FAIL: ${judged.reasons.join('; ')} (limits: jank ${limits.maxJankPct}%, p90 ${limits.maxP90Ms}ms)`);
+    process.exitCode = EXIT_FINDING;
+    return;
+  }
+  console.log(`OK: frames within limits (jank ${fmt(stats.jankyPct, '%')} <= ${limits.maxJankPct}%, p90 ${fmt(stats.p90Ms, 'ms')} <= ${limits.maxP90Ms}ms)${debug ? ' (debug build: indicative only)' : ''}`);
+}
+
+const MEM_ROWS = [
+  ['javaHeap', 'Java Heap'],
+  ['nativeHeap', 'Native Heap'],
+  ['code', 'Code'],
+  ['stack', 'Stack'],
+  ['graphics', 'Graphics'],
+  ['privateOther', 'Private Other'],
+  ['system', 'System'],
+  ['totalPss', 'TOTAL PSS'],
+  ['totalRss', 'TOTAL RSS'],
+  ['totalSwapPss', 'TOTAL SWAP PSS'],
+];
+
+const OBJECT_ROWS = [
+  ['views', 'Views'], ['viewRootImpl', 'ViewRootImpl'], ['appContexts', 'AppContexts'],
+  ['activities', 'Activities'], ['assets', 'Assets'], ['localBinders', 'Local Binders'],
+  ['proxyBinders', 'Proxy Binders'], ['parcelMemory', 'Parcel memory'],
+  ['deathRecipients', 'Death Recipients'], ['webViews', 'WebViews'],
+];
+
+function mb(kb) {
+  return kb === null || kb === undefined ? '-' : (kb / 1024).toFixed(1);
+}
+
+// One meminfo snapshot, after an optional trim request so it is steadier.
+async function measureMem(ctx, serial, { gc = false } = {}) {
+  const q = device.shellQuote(ctx.pkg);
+  if (gc) {
+    // A trim request, never a signal: nothing here can kill the app. Some
+    // builds reject it; the measurement goes ahead either way.
+    try {
+      shellOut(serial, `am send-trim-memory ${q} RUNNING_MODERATE`, 15000);
+    } catch {
+      // ignored
+    }
+    await sleep(2000);
+  }
+  // A busy app can answer with a partial dump (the app thread did not reply
+  // in time), so a dump with no TOTAL PSS is retried.
+  let parsed;
+  let raw = '';
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    raw = shellOut(serial, `dumpsys meminfo ${q}`, 60000);
+    parsed = device.parseMeminfo(raw);
+    if (parsed.noProcess || !parsed.unparsed) {break;}
+    await sleep(2000);
+  }
+  if (parsed.noProcess) {
+    console.error(`ERROR: ${ctx.pkg} is not running on ${serial} (dumpsys meminfo: No process found).`);
+    process.exit(1);
+  }
+  if (parsed.unparsed) {
+    console.error('ERROR: could not read TOTAL PSS from dumpsys meminfo (3 tries). Its output began:');
+    for (const l of raw.split('\n').slice(0, 6)) {console.error(`   | ${l}`);}
+    process.exit(1);
+  }
+  const top = resumedActivity(serial);
+  const foreground = Boolean(top && top.startsWith(`${ctx.pkg}/`));
+  return { kind: 'mem', at: new Date().toISOString(), serial, pkg: ctx.pkg, gc, foreground, topActivity: top, ...parsed };
+}
+
+function printMem(snap) {
+  console.log(`   ${snap.pkg} pid ${snap.pid} on ${snap.serial}${snap.gc ? ' (after trim request)' : ''} - MB`);
+  for (const [k, name] of MEM_ROWS) {
+    if (snap.summary[k] !== undefined) {console.log(`   ${name.padEnd(16)} ${mb(snap.summary[k]).padStart(8)}`);}
+  }
+  const objs = OBJECT_ROWS.filter(([k]) => snap.objects[k] !== undefined).map(([k, n]) => `${n} ${snap.objects[k]}`);
+  if (objs.length) {console.log(`   objects: ${objs.join(', ')}`);}
+  if (!snap.foreground) {
+    console.warn(`WARN: ${snap.pkg} is not in the foreground (top: ${snap.topActivity || 'unknown'}); a backgrounded app is trimmed, so this number is not comparable to a foreground one.`);
+  }
+}
+
+function printMemCompare(res, a, b) {
+  console.log(`   ${a} -> ${b} (MB)`);
+  const rows = new Map(MEM_ROWS);
+  for (const d of res.summary) {
+    const sign = d.delta > 0 ? '+' : '';
+    console.log(`   ${rows.get(d.key).padEnd(16)} ${mb(d.before).padStart(8)} -> ${mb(d.after).padStart(8)}  ${sign}${mb(d.delta)}`);
+  }
+  const orow = new Map(OBJECT_ROWS);
+  const changed = res.objects.filter(o => o.delta !== 0 && orow.has(o.key));
+  if (changed.length) {
+    console.log(`   objects: ${changed.map(o => `${orow.get(o.key)} ${o.before}->${o.after}`).join(', ')}`);
+  } else {
+    console.log('   objects: unchanged');
+  }
+}
+
+function memVerdict(res, limits) {
+  for (const n of res.notes || []) {console.warn(`WARN: ${n}`);}
+  if (res.failed) {
+    console.error(`FAIL: ${res.reasons.join('; ')}`);
+    console.error('   Repeat the flow a few more times to confirm: steady growth per iteration is a leak, a one-off step is a cache.');
+    process.exitCode = EXIT_FINDING;
+    return;
+  }
+  const pct = res.growthPct === null ? '' : ` (${res.growthPct}%)`;
+  console.log(`OK: TOTAL PSS ${res.growthKb >= 0 ? '+' : ''}${mb(res.growthKb)} MB${pct} within ${limits.maxGrowthMb} MB${limits.maxGrowthPct !== undefined && limits.maxGrowthPct !== null ? ` / ${limits.maxGrowthPct}%` : ''}; Activities / ViewRootImpl / AppContexts did not grow`);
+}
+
+function memLimits(ctx, opts) {
+  return {
+    maxGrowthMb: perfLimit(ctx, opts, 'max-growth-mb', 'maxMemGrowthMb'),
+    maxGrowthPct: opts['max-growth-pct'] !== undefined ? perfLimit(ctx, opts, 'max-growth-pct', 'maxMemGrowthPct') : null,
+  };
+}
+
+// mem [--gc] [--label n] | mem --compare <a> [--to <b>|current] [--max-growth-mb n] [--max-growth-pct n]
+async function cmdMem(opts) {
+  const ctx = deviceContext(opts);
+  androidOnly(ctx, 'mem');
+  pkgOrExit(ctx);
+  const serial = serialOrExit(ctx);
+
+  if (opts.compare !== undefined) {
+    const a = labelOrExit(opts.compare, 'compare');
+    if (!a) {
+      console.error('Usage: mem --compare <labelA> [--to <labelB>|current]');
+      process.exit(1);
+    }
+    const to = opts.to === undefined || opts.to === 'current' ? 'current' : labelOrExit(opts.to, 'to');
+    const before = loadPerf('mem', a);
+    const after = to === 'current' ? await measureMem(ctx, serial, { gc: opts.gc === true }) : loadPerf('mem', to);
+    const restarted = Boolean(before.pid && after.pid && before.pid !== after.pid);
+    if (before.foreground !== undefined && after.foreground !== undefined && before.foreground !== after.foreground) {
+      console.warn('WARN: one snapshot was taken with the app in the background (trimmed) and one in the foreground; the comparison is not meaningful.');
+    }
+    const limits = memLimits(ctx, opts);
+    const res = device.compareMem(before, after, limits);
+    printMemCompare(res, a, to);
+    if (restarted) {
+      console.warn(`WARN: the app restarted between the snapshots (pid ${before.pid} -> ${after.pid}), so this is not a leak comparison. Take both snapshots in one app session.`);
+      process.exitCode = EXIT_WARN;
+      return;
+    }
+    memVerdict(res, limits);
+    return;
+  }
+
+  const label = labelOrExit(opts.label);
+  const snap = await measureMem(ctx, serial, { gc: opts.gc === true });
+  printMem(snap);
+  savePerf('mem', label, { ...snap, label });
+  console.log(`OK: TOTAL PSS ${mb(snap.summary.totalPss)} MB (a Flutter app's Dart heap is counted in Native Heap / Private Other, not Java Heap)`);
+}
+
+// Steps that make no sense inside a loop.
+const NOT_IN_LOOP = new Set(['leak-loop', 'connect', 'disconnect', 'health', 'startup']);
+
+// leak-loop --steps "<cmd ...>; <cmd ...>" [--times n] [--label n] [--warmup n] [--max-growth-mb n]
+async function cmdLeakLoop(opts) {
+  if (typeof opts.steps !== 'string' || !opts.steps.trim()) {
+    console.error('Usage: leak-loop --steps "<driver command>; <driver command>" [--times n] [--label name] [--warmup n] [--max-growth-mb n]');
+    process.exit(1);
+  }
+  const ctx = deviceContext(opts);
+  androidOnly(ctx, 'leak-loop');
+  pkgOrExit(ctx);
+  const serial = serialOrExit(ctx);
+  let steps;
+  try {
+    steps = device.splitSteps(opts.steps);
+  } catch (err) {
+    console.error(`ERROR: --steps: ${err.message}`);
+    process.exit(1);
+  }
+  for (const s of steps) {
+    if (!COMMANDS[s[0]] || NOT_IN_LOOP.has(s[0])) {
+      console.error(`ERROR: "${s[0]}" cannot be a leak-loop step (use driver commands such as open-url, tap, back, key, wait-for).`);
+      process.exit(1);
+    }
+  }
+  const times = Number(opts.times !== undefined ? opts.times : (ctx.cfg.perf || {}).leakLoopTimes || 10);
+  const warmup = Number(opts.warmup !== undefined ? opts.warmup : 1);
+  if (!Number.isInteger(times) || times < 1 || !Number.isInteger(warmup) || warmup < 0) {
+    console.error('ERROR: --times needs a whole number >= 1 and --warmup >= 0');
+    process.exit(1);
+  }
+  const label = labelOrExit(opts.label) || 'leak';
+  // Each step runs as its own driver process, exactly as from the shell, on
+  // the same profile and flavor.
+  const pass = [];
+  for (const k of ['platform', 'flavor']) {
+    if (typeof opts[k] === 'string') {pass.push(`--${k}`, opts[k]);}
+  }
+  const runStep = (step, tag) => {
+    const argv = [__filename, ...step];
+    for (let i = 0; i < pass.length; i += 2) {
+      if (!step.includes(pass[i])) {argv.push(pass[i], pass[i + 1]);}
+    }
+    try {
+      execFileSync(process.execPath, argv, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 180000 });
+    } catch (err) {
+      const out = `${err.stdout || ''}${err.stderr || ''}`.trim().split('\n').slice(-6).map(l => `     | ${l}`).join('\n');
+      console.error(`FAIL: step "${step.join(' ')}" failed on ${tag} (exit ${err.status === null ? 'timeout' : err.status})`);
+      if (out) {console.error(out);}
+      console.error('   The leak probe was aborted; fix the step (or the app) and run it again.');
+      process.exitCode = 1;
+      return false;
+    }
+    return true;
+  };
+  const iterate = tag => steps.every(s => runStep(s, tag));
+
+  console.log(`   leak-loop on ${ctx.pkg} (${serial}): ${steps.length} step(s) x ${times}${warmup ? `, ${warmup} warm-up` : ''}`);
+  for (let i = 1; i <= warmup; i++) {
+    if (!iterate(`warm-up ${i}/${warmup}`)) {return;}
+    console.log(`   warm-up ${i}/${warmup} done`);
+  }
+  const before = { ...(await measureMem(ctx, serial, { gc: true })), label: `${label}-before` };
+  if (!before.foreground) {
+    console.error(`ERROR: ${ctx.pkg} is not in the foreground after the warm-up (top: ${before.topActivity || 'unknown'}).`);
+    console.error('   The steps must start and end on the same screen of the app (a BACK on the root screen leaves the app).');
+    process.exit(1);
+  }
+  console.log(`   baseline: TOTAL PSS ${mb(before.summary.totalPss)} MB, Activities ${fmt(before.objects.activities)}`);
+  savePerf('mem', `${label}-before`, before);
+  const started = Date.now();
+  for (let i = 1; i <= times; i++) {
+    if (!iterate(`iteration ${i}/${times}`)) {return;}
+    const pid = appPid(serial, ctx.pkg);
+    if (pid !== before.pid) {
+      console.error(`FAIL: the app process changed on iteration ${i}/${times} (pid ${before.pid} -> ${pid || 'none'}): it crashed or was killed. Check logcat.`);
+      process.exitCode = EXIT_FINDING;
+      return;
+    }
+    const top = resumedActivity(serial);
+    if (!top || !top.startsWith(`${ctx.pkg}/`)) {
+      console.error(`ERROR: iteration ${i}/${times} left the app (top: ${top || 'unknown'}). The steps must end on the screen they start from;`);
+      console.error('   add a pause before back (sleep --ms 1500) or use fewer backs. The leak probe was aborted.');
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`   iteration ${i}/${times} done (${Math.round((Date.now() - started) / 1000)}s)`);
+  }
+  const after = { ...(await measureMem(ctx, serial, { gc: true })), label: `${label}-after` };
+  savePerf('mem', `${label}-after`, after);
+  if (before.pid !== after.pid) {
+    console.error(`FAIL: the app process changed during the loop (pid ${before.pid} -> ${after.pid}): it crashed or was killed. Check logcat.`);
+    process.exitCode = EXIT_FINDING;
+    return;
+  }
+  if (!after.foreground) {
+    console.error(`ERROR: ${ctx.pkg} was not in the foreground for the final snapshot (top: ${after.topActivity || 'unknown'}); the comparison would not be valid.`);
+    process.exitCode = 1;
+    return;
+  }
+  const limits = memLimits(ctx, opts);
+  const res = device.compareMem(before, after, limits);
+  printMemCompare(res, `${label}-before`, `${label}-after`);
+  if (res.growthKb !== null) {
+    console.log(`   per iteration: ${res.growthKb >= 0 ? '+' : ''}${(res.growthKb / 1024 / times).toFixed(2)} MB`);
+  }
+  memVerdict(res, limits);
+}
+
+// startup [--cold | --warm] [--times n] [--max-ms n]
+async function cmdStartup(opts) {
+  const ctx = deviceContext(opts);
+  androidOnly(ctx, 'startup');
+  const pkg = pkgOrExit(ctx);
+  if (!ctx.activity) {
+    console.error('ERROR: app.androidActivity (or the flavor\'s androidActivity) is not set in qc.config.json');
+    process.exit(1);
+  }
+  const serial = serialOrExit(ctx);
+  const warm = opts.warm === true;
+  const times = Number(opts.times !== undefined ? opts.times : 3);
+  if (!Number.isInteger(times) || times < 1) {
+    console.error('ERROR: --times needs a whole number >= 1');
+    process.exit(1);
+  }
+  const maxMs = perfLimit(ctx, opts, 'max-ms', 'maxColdStartMs');
+  const component = ctx.activity.includes('/') ? ctx.activity : `${pkg}/${ctx.activity}`;
+  const debug = debuggable(serial, pkg);
+  console.log(`   ${warm ? 'warm' : 'cold'} start of ${component} on ${serial}, ${times} time(s)${debug ? ' [debug build]' : ''}`);
+
+  const samples = [];
+  for (let i = 1; i <= times; i++) {
+    if (warm) {
+      shellOut(serial, 'input keyevent 3');
+    } else {
+      shellOut(serial, `am force-stop ${device.shellQuote(pkg)}`);
+    }
+    await sleep(1500);
+    const r = device.parseAmStartW(shellOut(serial, `am start -W -n ${device.shellQuote(component)}`, 90000));
+    if (r.error) {
+      console.error(`ERROR: am start failed: ${r.error}`);
+      process.exit(1);
+    }
+    const ms = r.totalTime !== null ? r.totalTime : r.waitTime;
+    const notes = [];
+    if (r.status && r.status !== 'ok') {notes.push(`Status ${r.status}${r.totalTime === null ? ', WaitTime used' : ''}`);}
+    if (r.delivered) {notes.push('delivered to a running activity, not a launch');}
+    console.log(`   run ${i}/${times}: ${fmt(ms, 'ms')}  (LaunchState ${r.launchState || '-'}, TotalTime ${fmt(r.totalTime)}, WaitTime ${fmt(r.waitTime)})${notes.length ? `  [${notes.join('; ')}]` : ''}`);
+    if (ms !== null && !r.delivered) {samples.push(ms);}
+  }
+  const med = device.median(samples);
+  savePerf('startup', labelOrExit(opts.label), {
+    kind: 'startup', at: new Date().toISOString(), serial, pkg, component, mode: warm ? 'warm' : 'cold', debuggable: debug, maxMs, samples, medianMs: med,
+  });
+  if (med === null) {
+    console.warn('WARN: no usable launch time was measured.');
+    process.exitCode = EXIT_WARN;
+    return;
+  }
+  if (med > maxMs) {
+    if (debug) {
+      console.warn(`WARN: median ${med}ms > ${maxMs}ms, but this is a debug build (JIT, asserts, no AOT): indicative only. Measure a profile or release build before filing it.`);
+      process.exitCode = EXIT_WARN;
+      return;
+    }
+    console.error(`FAIL: median ${warm ? 'warm' : 'cold'} start ${med}ms > ${maxMs}ms`);
+    process.exitCode = EXIT_FINDING;
+    return;
+  }
+  console.log(`OK: median ${warm ? 'warm' : 'cold'} start ${med}ms <= ${maxMs}ms${debug ? ' (debug build: indicative only)' : ''}`);
+}
+
+// sleep --ms n: a pause between leak-loop steps (route transitions are async).
+async function cmdSleep(opts) {
+  const ms = Number(opts.ms);
+  if (!Number.isFinite(ms) || ms < 0 || ms > 600000) {
+    console.error('Usage: sleep --ms <0..600000>');
+    process.exit(1);
+  }
+  await sleep(ms);
+  console.log(`OK: slept ${ms}ms`);
+}
+
+// key --code BACK|HOME|ENTER|<number>|KEYCODE_*: adb input keyevent, no Appium.
+async function cmdKey(opts) {
+  const arg = device.keyEventArg(opts.code);
+  if (!arg) {
+    console.error('Usage: key --code BACK|HOME|ENTER|MENU|TAB|DEL|APP_SWITCH|<keycode number>|KEYCODE_<NAME>');
+    process.exit(1);
+  }
+  const ctx = deviceContext(opts);
+  androidOnly(ctx, 'key');
+  const serial = serialOrExit(ctx);
+  device.adb(serial, ['shell', 'input', 'keyevent', arg], { timeout: 15000 });
+  console.log(`OK: key ${opts.code} sent to ${serial}`);
+}
+
 // --- Help --------------------------------------------------------------------
 
 function printHelp() {
@@ -1363,6 +1936,42 @@ Commands:
   health              [--fix] [--timeout <ms>]    Android: boot flag, package/activity
                                                   services, load average. --fix cold boots
                                                   the profile's AVD when unhealthy
+  key                 --code BACK|HOME|ENTER|<n>  Android key event via adb (no Appium session)
+  sleep               --ms <n>                    Pause (between leak-loop steps)
+
+Performance and memory (Android, adb dumpsys; iOS: WARN, exit 2).
+Exit codes: 0 OK within limits, 3 FAIL over a limit (a finding),
+2 WARN not enough data, 1 the probe could not run. Limits: config.perf.*,
+overridden by the flags. Saved JSON goes to <run>/perf/ (QC_RUN_DIR).
+  perf                --reset                     Zero the frame stats (gfxinfo + SurfaceFlinger)
+                      [--label <name>]            Read frame stats since the reset; save
+                                                  <run>/perf/gfx-<name>.json
+                      --max-jank <pct>            Default perf.maxJankPct (10)
+                      --max-p90 <ms>              Default perf.maxP90Ms (32)
+                      --source surfaceflinger     Frame times of the app's SurfaceView layer
+                                                  instead of gfxinfo: use this for Flutter,
+                                                  which gfxinfo barely sees (approximate)
+  mem                 [--gc] [--label <name>]     dumpsys meminfo App Summary + Objects, in MB;
+                                                  --gc sends a trim-memory request and waits 2s;
+                                                  saves <run>/perf/mem-<name>.json
+                      --compare <a> [--to <b>|current]
+                                                  Deltas between snapshots; FAIL when TOTAL PSS
+                                                  grows > --max-growth-mb (perf.maxMemGrowthMb,
+                                                  25) or > --max-growth-pct, or Activities /
+                                                  ViewRootImpl / AppContexts grew
+  leak-loop           --steps "<cmd>; <cmd>"      Leak probe: warm-up, mem --gc baseline,
+                      [--times <n>] [--label <n>] repeat the steps n times (perf.leakLoopTimes,
+                      [--warmup <n>]              10), mem --gc again, compare. Each step is a
+                      [--max-growth-mb <n>]       driver command run as its own process, e.g.
+                                                  --steps "open-url --url https://example.com/p/1; sleep --ms 1500; key --code BACK"
+                                                  The steps must end on the screen they start
+                                                  from: an iteration that leaves the app, or a
+                                                  crash (pid change), aborts the probe
+  startup             [--cold | --warm]           am start -W, median over --times (default 3);
+                      [--times <n>] [--max-ms <n>]
+                                                  FAIL over perf.maxColdStartMs (4000). A debug
+                                                  build only WARNs: measure profile/release
+                                                  (perf too: over a limit on a debug build is WARN)
 
 Selector tips:
   --selector <testID>  Matches the testID prop (preferred). iOS: accessibility id;
@@ -1371,7 +1980,8 @@ Selector tips:
                        testID repeats per list item - scope with the list item's
                        unique container testID (bounds-based, survives view flattening).
   --index <n>          Works on tap / input when several elements share a testID.
-  --platform <profile> On open-url / log-mark / assert-request / health: the device
+  --platform <profile> On open-url / log-mark / assert-request / health / perf / mem /
+                       leak-loop / startup / key: the device
                        profile (default: the session's, else android).
   Text fallback        Matches label/value/name attributes or text content.
 
@@ -1400,45 +2010,51 @@ Environment:
 
 // --- Main --------------------------------------------------------------------
 
+const COMMANDS = {
+  connect: cmdConnect,
+  disconnect: cmdDisconnect,
+  tap: cmdTap,
+  'tap-text': cmdTap,
+  'long-press': cmdLongPress,
+  longpress: cmdLongPress,
+  'assert-visible': cmdAssertVisible,
+  'assert-not-visible': cmdAssertNotVisible,
+  screenshot: cmdScreenshot,
+  input: cmdInput,
+  swipe: cmdSwipe,
+  back: cmdBack,
+  find: cmdFind,
+  'open-url': cmdOpenUrl,
+  'log-mark': cmdLogMark,
+  'assert-request': cmdAssertRequest,
+  'wait-for': cmdWaitFor,
+  'audit-ids': cmdAuditIds,
+  health: cmdHealth,
+  perf: cmdPerf,
+  mem: cmdMem,
+  'leak-loop': cmdLeakLoop,
+  startup: cmdStartup,
+  key: cmdKey,
+  sleep: cmdSleep,
+};
+
 (async () => {
   const [command, ...rest] = process.argv.slice(2);
   const opts = parseArgs(rest);
-
-  const commands = {
-    connect: cmdConnect,
-    disconnect: cmdDisconnect,
-    tap: cmdTap,
-    'tap-text': cmdTap,
-    'long-press': cmdLongPress,
-    longpress: cmdLongPress,
-    'assert-visible': cmdAssertVisible,
-    'assert-not-visible': cmdAssertNotVisible,
-    screenshot: cmdScreenshot,
-    input: cmdInput,
-    swipe: cmdSwipe,
-    back: cmdBack,
-    find: cmdFind,
-    'open-url': cmdOpenUrl,
-    'log-mark': cmdLogMark,
-    'assert-request': cmdAssertRequest,
-    'wait-for': cmdWaitFor,
-    'audit-ids': cmdAuditIds,
-    health: cmdHealth,
-  };
 
   if (!command || command === '--help' || command === '-h' || command === 'help') {
     printHelp();
     process.exit(0);
   }
 
-  if (!commands[command]) {
+  if (!COMMANDS[command]) {
     console.error(`Unknown command: ${command}`);
     printHelp();
     process.exit(1);
   }
 
   try {
-    await commands[command](opts);
+    await COMMANDS[command](opts);
   } catch (err) {
     console.error('ERROR:', err.message || err);
     process.exit(1);
