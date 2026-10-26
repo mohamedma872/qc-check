@@ -131,14 +131,15 @@ with its `dir`). It is written `<run>/` below.
       state.json                  run state (state.js)
       cost.json, cost.md          run cost (cost.js)
       plan.md                     test plan (you write it)
-      report.md                   final report (you write it)
+      report.md                   final report, the evidence record (you write it)
+      review.md                   plain-language comment for the ticket and PR (you write it)
       screenshots/001-name.png    driver.js screenshot --name <name>
       recordings/001-name.mp4     record.sh stop <name>
       trees/001-name.txt          dump-tree.js --save <name>
       api/001-name.json           api.js ... --save <name>, redacted
 ```
 
-- You write only `plan.md`, `report.md` and the few notes the references name
+- You write only `plan.md`, `report.md`, `review.md` and the few notes the references name
   (for example `ticket.md` when there is no tracker), and only in `<run>/`.
 - Evidence is placed by the scripts. Give a short `--name` (no `/`, no
   extension) and the script numbers it in capture order and prints the path.
@@ -237,8 +238,8 @@ stopped. Five mechanisms, all mandatory:
 | 6 | `tablet` | Android tablet pass (`config.devices.android_tablet`) plus responsive checks. **Only if explicitly requested** | same as `phone` | `references/device-driving.md` |
 | 7 | `ios` | iOS pass on a simulator or iPhone (`config.devices.ios`). **Only if explicitly requested** | same as `phone` | `references/device-driving.md` |
 | 8 | `unit-tests` | Extend the unit suites for the ticket's new logic | `identify-units, extend-suites, run-green, commit` | `references/unit-tests.md` |
-| 9 | `report` | Assemble the QC report | `assemble` | `references/reporting.md` |
-| 10 | `publish` | Post the report and evidence to the tracker, labels gated by verdict | `comment, attachments, labels, confirm` | `references/reporting.md` |
+| 9 | `report` | Assemble the QC report, then the plain-language review comment | `assemble` | `references/reporting.md` |
+| 10 | `publish` | Post the review comment and attach the report and evidence to the tracker, labels gated by verdict | `comment, attachments, labels, confirm` | `references/reporting.md` |
 
 Read each reference **when you reach that phase**, not all up front. If
 `node qc/state.js ABC-123 get` shows different sub-step names for a phase, the
@@ -376,9 +377,9 @@ Publish degrades with the tracker:
 
 | `config.tracker.kind` and tools | Publish does |
 |---|---|
-| A tracker, and `config.tracker.tools.addComment` non-empty | Post the report as a comment, attach evidence with `config.tracker.tools.uploadAttachment`, apply `config.tracker.passLabel` or `config.tracker.blockedLabel` with `config.tracker.tools.addLabels` per the verdict, then confirm the write back to the user |
+| A tracker, and `config.tracker.tools.addComment` non-empty | Post `review.md` as a comment, attach `report.md` and the evidence with `config.tracker.tools.uploadAttachment`, apply `config.tracker.passLabel` or `config.tracker.blockedLabel` with `config.tracker.tools.addLabels` per the verdict, then confirm the write back to the user |
 | A tracker, but a tool name is empty | Do what is available. For the rest, print the exact text and file paths for the user to paste, and mark those sub-steps `skipped no <tool> configured` |
-| `none` | Nothing external to write. `set publish skipped no tracker configured`, then tell the user where the report and evidence are: `<run>/report.md` and the evidence folders beside it |
+| `none` | Nothing external to write. `set publish skipped no tracker configured`, then tell the user where the report and evidence are: `<run>/report.md`, `<run>/review.md` and the evidence folders beside it |
 
 Posting to a tracker is a write to an external system. Ask before the first
 write unless the user already approved publishing for this run. The same holds
