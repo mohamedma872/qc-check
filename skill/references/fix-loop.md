@@ -21,6 +21,10 @@ Write the fix board (`fixes.md` in the run folder) with one row per finding:
 
 - **app-fix** - a defect in the app code, fixable here (wrong binding, dead
   handler, wrong copy, missing gate). The loop works these in severity order.
+  Carry the run's baseline verdict into the row (`new in this PR` or `already
+  on <base>`, from `references/baseline.md`): a bug already on the base
+  branch is usually its own fix branch off the base, not part of the PR's
+  fix.
 - **be** - backend scope (broken endpoint, seed data). Not fixable here: it goes
   to the report and the ticket for the backend team, and the loop skips it.
 - **product** - needs a product decision (for example remove a menu row versus
@@ -44,6 +48,11 @@ Write the fix board (`fixes.md` in the run folder) with one row per finding:
 3. **Fix minimally.** The smallest change that kills the defect, matching house
    style, with no drive-by refactors. Add or extend a test suite when the fix is
    logic (and remember `git add -f` if `config.codeMap.testsGitignored` is true).
+   If the run left a failing repro test for this finding (a
+   `qc-repro/<ticket>-<slug>` branch, or test code in `report.md`; see
+   `references/unit-tests.md`), cherry-pick or paste it first and run it red.
+   The fix is done when that test turns green without being edited; keep it in
+   the fix commit and drop the `[QC-REPRO ...]` prefix from its name.
 4. **Re-verify ON DEVICE.** Rebuild and reinstall with
    `config.app.build.android` (or `config.app.build.ios`), asking the user for
    the command and waiting if that key is empty. Then drive to the screen with

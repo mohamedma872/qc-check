@@ -61,6 +61,7 @@ device and reports what it saw, which catches a different class of problem:
 | `qc-check setup` | Detect the project and configure it. Run this first |
 | `qc-check doctor` | Check every prerequisite and name the fix for what is missing |
 | `qc-check run <ticket>` | QC one ticket end to end |
+| `qc-check run pr <n>` | QC a pull request (GitHub or Bitbucket Cloud): its branch is built in its own worktree and tested |
 | `qc-check run all` | Sweep every screen in every locale |
 | `qc-check run fix <id>` | Loop over a previous run's findings: fix, re-verify, push |
 | `qc-check status [ticket]` | Phases, sub-steps, findings, and where a run resumes |
@@ -164,7 +165,7 @@ skill/references/      one file per phase, read when that phase starts
 runtime/               the device scripts, installed into your repo as qc/
 agents/                optional slash-command adapters
 qc.config.example.json every project-specific fact
-test/                  smoke test and the leak guard
+test/                  smoke test, PR intake test and the leak guard
 ```
 
 `test/no-private-refs.js` asserts that every identifier in the repository is a
@@ -173,6 +174,7 @@ committed by accident.
 
 ```bash
 npm test              # CLI and runtime smoke test, no device needed
+node test/intake.js   # PR intake, worktree builds, install verification, no network
 npm run check:leaks   # placeholder-only guard
 ```
 

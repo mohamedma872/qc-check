@@ -109,7 +109,38 @@ nohup appium --port 4723 --log /tmp/appium.log >/dev/null 2>&1 & sleep 5
 ```
 
 Use `config.devices.appium.host` and `config.devices.appium.port` if they differ
-from the defaults above. `driver.js`, `dump-tree.js` and `record.sh` share one
+from the defaults above.
+
+**Android: check the device is healthy before you trust it.**
+
+```bash
+node qc/driver.js health            # boot flag, package/activity services, load average
+```
+
+`OK: healthy` means go. `ERROR: unhealthy - service package: not found` (or
+`sys.boot_completed` not 1) means system_server is down or crash-looping: installs
+then fail silently and launches hang, and every result from that device is
+noise. Only a cold boot fixes it:
+
+```bash
+node qc/driver.js health --fix      # emu kill, then boot the configured AVD with -no-snapshot-load
+```
+
+Run `--fix` only after `health` said unhealthy (or that the AVD is not
+running): it ends any open session, so `connect` again afterwards. If it is
+still unhealthy after the cold boot, stop and report a blocker owned by the
+user. `WARN: the device is overloaded` is not a failure, but expect slow,
+flaky steps: allow more time per step rather than retrying in a loop.
+`connect` runs the same check first and refuses an unhealthy device
+(`--skip-health` exists for diagnosis, not for a pass).
+
+**One device per profile, always.** With several devices attached, the driver
+targets only the emulator whose AVD name is `config.devices.<profile>.avd` (or
+the serial in `.udid`) and passes that serial to every adb call it makes.
+`connect` records it in the session, and `record.sh` exports it as
+`ANDROID_SERIAL`. When you run adb by hand, do the same: `adb -s <serial> ...`
+with the serial `health` printed. Never run a bare `adb` command, and never
+touch a device the config does not name: another lane may be driving it. `driver.js`, `dump-tree.js` and `record.sh` share one
 session record per repo (`node qc/config.js --session-file` prints it), so
 another repo QC'd on the same machine never touches this run's session; do not
 set `QC_SESSION_FILE` yourself. If `connect` says the device is in use by
@@ -209,8 +240,13 @@ Common realities worth checking rather than assuming:
 
 - Input fields often have **no unique testID** and share one generic
   accessibility label, so a selector like `~Input Field` hits the first match
-  only. Target the second field by its center coordinates from `dump-tree.js`,
-  and record the missing testIDs as a yellow finding with the ids you suggest.
+  only. On Flutter they often have **no name at all** (`EditText ~` in
+  `dump-tree.js --all`), so no `--selector` reaches them. Run
+  `node qc/driver.js audit-ids` on the screen: it lists every interactive
+  element with no resource-id / content-desc (iOS: no identifier) and the
+  command that still drives each one, usually
+  `input --class android.widget.EditText --index <n>`. Record its suggested
+  yellow finding with the ids you propose.
 - Buttons are usually reachable by label (`~Log in`, `~Sign Up`, `~Remember me`,
   `~Forgot Password?`), but the label is locale-dependent (see below).
 - Debug builds sometimes **prefill** a test account. Verify what is in the
@@ -230,8 +266,21 @@ sleep 5
 node qc/driver.js screenshot --name "after-login"
 ```
 
+Fields with no testID at all, by class and position (`audit-ids` prints the
+exact command), or by tapping a point to focus and typing into it:
+
+```bash
+node qc/driver.js audit-ids                                                      # which fields lack ids
+node qc/driver.js input --class android.widget.EditText --index 0 --credential username
+node qc/driver.js input --class android.widget.EditText --index 1 --credential password
+node qc/driver.js input --x 540 --y 987 --credential password                    # tap to focus, then type
+```
+
 Use real testIDs when the fields have them. `--index` picks the nth match when
-two fields share one label. If the driver says there are no credentials for
+two fields share one label (or the nth field of a `--class`, in screen order).
+`--credential` works the same with every target: the value goes straight to
+Appium and never through adb, whose daemon logs every shell command into
+logcat. If the driver says there are no credentials for
 `<env>`, stop and ask the user to run `qc-check env credentials <env>`. Do not
 type a value you got any other way.
 
@@ -353,7 +402,123 @@ node qc/driver.js swipe --direction up
 node qc/driver.js screenshot --name "tc2-saved"   # <run>/screenshots/NNN-tc2-saved.png
 node qc/driver.js find --text "Label"
 node qc/dump-tree.js --save "tc2-form"            # <run>/trees/NNN-tc2-form.txt
+node qc/driver.js wait-for --text "Saved" --screenshot "tc3-snackbar"   # capture the instant it shows
+node qc/driver.js wait-for --selector "~spinner" --gone --timeout 20000 # wait out a loader
+node qc/driver.js open-url --url "https://www.example.com/p/ABC-123"     # deep link / App Link
+node qc/driver.js log-mark                                              # start a network window (Android)
+node qc/driver.js assert-request --grep 'products/ABC-123' --min 1      # the app called it
+node qc/driver.js assert-request --grep 'recsForPlacements' --count 0   # the app did NOT call it
+node qc/driver.js audit-ids                                             # interactive elements with no id
 ```
+
+**Short-lived UI (snackbars, toasts, loaders).** A plain `screenshot` after the
+tap is usually too late. `wait-for` polls (every 150 ms) until the element
+matches and captures immediately, with `adb screencap` on Android; the
+screenshot is numbered like any other and its path is printed. Text matches
+include partial content-desc matches, since Flutter merges a widget's labels
+into one. A timeout prints `ASSERT FAILED - ... did not appear` and still saves
+a `<name>-timeout` capture of what was on screen instead. `--gone` waits for the
+element to disappear (a loader finishing) and is the right way to wait instead
+of `sleep`.
+
+**Deep links.** `open-url` fires the URL at the app under test only (Android:
+`am start` with `VIEW` + `BROWSABLE` and the `<pkg>` / activity from the
+config; iOS simulator: `simctl openurl`). Pass the URL as given, quoted for
+your own shell; the driver quotes it for the device. `OK: ... (delivered to the
+running activity)` is a pass: the app was already open and received the link
+in place. Then assert the screen it should land on, with `wait-for` or
+`assert-visible`; `OK:` only proves the link was delivered, not routed. Each
+`open-url` pushes a new screen, so press `back` once per link to unwind.
+
+**Network assertions (Android only).** `assert-request` counts the app's own
+network calls in `adb logcat`, so it only works when the build logs its
+requests (most debug builds do: Dio's `LogInterceptor`, OkHttp's logging
+interceptor). The shape is always mark, act, wait, assert:
+
+```bash
+node qc/driver.js log-mark                       # the window starts here
+node qc/driver.js open-url --url "<link>"        # or the tap under test
+node qc/driver.js wait-for --text "<something the screen shows when loaded>"
+node qc/driver.js assert-request --grep 'recsForPlacements' --count 0
+```
+
+Wait for the screen to finish loading before asserting: an assert run right
+after the action can say 0 because the call has not been made yet, which
+passes a `--count 0` for the wrong reason. Counting rules: only lines from the
+app's own process, never adbd's echo of your own commands, and a URL printed
+again under a response header is not counted twice (`--all-lines` counts every
+line, `--all-processes` every process). `--grep` is a regex. `--since <name>`
+picks a mark set with `log-mark --name <name>`; with no `--since` the latest
+mark is used, and with no mark at all the whole buffer is (a `WARN` says so).
+`ASSERT FAILED - inconclusive: the log buffer rotated` means part of the window
+is gone, so `--count` / `--max` cannot be proven: mark closer to the action and
+run the step again. If the build does not log its requests, say so in the
+case note and verify server-side with `qc/api.js` instead. On iOS,
+`assert-request` and `log-mark` print `WARN: ... not supported on iOS` and exit
+2: the check was not run, so mark that case blocked, never passed.
+
+**Performance and memory probes (Android only).** Run these when the plan
+asks for performance, a screen feels slow, or the change touches lists,
+images, navigation or lifecycle code. They read `adb dumpsys`; on iOS they
+print `WARN: ... Android-only` and exit 2 (profile with Instruments by hand and
+mark the case blocked). Exit codes: `0` + `OK:` within limits, `3` + `FAIL:`
+over a limit (record it as a finding, quoting the line), `2` + `WARN:` not
+enough data or not comparable (not a pass), `1` + `ERROR:` the probe could not
+run. Limits come from `config.perf` (`maxJankPct` 10, `maxP90Ms` 32,
+`maxMemGrowthMb` 25, `maxColdStartMs` 4000, `leakLoopTimes` 10); a flag
+overrides each. With `--label`, results are saved as JSON under `<run>/perf/`.
+
+```bash
+# Frames: reset, exercise the screen for a few seconds, read
+node qc/driver.js perf --reset
+node qc/driver.js swipe --direction up            # scroll / animate what is under test
+node qc/driver.js perf --label tc4-scroll         # gfxinfo: jank %, p50/p90/p95/p99, slow UI thread...
+node qc/driver.js perf --source surfaceflinger --label tc4-scroll-sf   # Flutter: see below
+
+# Memory snapshot (MB: Java / Native heap, Code, Graphics, TOTAL PSS / RSS, Activities, Views...)
+node qc/driver.js mem --gc --label before
+node qc/driver.js mem --compare before            # vs now; --to <label> compares two saved ones
+
+# Leak probe: warm-up, baseline, repeat the flow n times, measure, compare
+node qc/driver.js leak-loop --label pdp --times 10 \
+  --steps "open-url --url https://www.example.com/p/ABC-123; sleep --ms 4000; key --code BACK; sleep --ms 2000"
+
+# Launch time: force-stop + am start -W, median of n runs
+node qc/driver.js startup --cold --times 3
+```
+
+- **Flutter and gfxinfo.** gfxinfo counts frames drawn by Android views. A
+  Flutter app draws through its own raster thread into a SurfaceView, so
+  gfxinfo sees almost none of its frames and `perf` says `WARN: not enough
+  data`. Use `perf --source surfaceflinger`, which times the app's SurfaceView
+  buffer layer (frame time = gap between presents, jank = a frame over 1.5
+  refresh periods, idle gaps excluded: approximate), or `flutter run
+  --profile` with DevTools for a real frame breakdown.
+- **Debug builds** are JIT-compiled with asserts on: frame and launch times
+  are many times slower than release. The driver detects `DEBUGGABLE` and
+  turns an over-limit result into `WARN: ... indicative only`. File a
+  performance finding only from a profile or release build.
+- **Memory.** A Flutter app's Dart heap is not in Java Heap: it is counted in
+  Native Heap and Private Other. `--gc` sends `am send-trim-memory ... RUNNING_MODERATE`
+  and waits 2 s (never a signal); it steadies the number but is not a full
+  GC. Compare snapshots taken on the same screen, in the foreground, in one
+  app session (a pid change makes `mem --compare` a WARN, exit 2): `mem`
+  warns when the app is in the background, where Android trims it. TOTAL
+  PSS includes swapped pages on recent releases; a WARN flags a swap shift
+  between snapshots (device memory pressure), so check TOTAL RSS too.
+- **What a leak looks like.** `mem --compare` and `leak-loop` fail when TOTAL
+  PSS grows more than `maxMemGrowthMb` (or `--max-growth-pct`), or when
+  Activities, ViewRootImpl or AppContexts grew: a screen that is gone but
+  still referenced. One step of growth after the first pass is a cache (that
+  is why leak-loop runs one warm-up first, `--warmup n`); steady growth per
+  iteration is a leak. Re-run with a higher `--times` before filing it.
+- **leak-loop steps** are driver commands separated by `;`, each run as its
+  own `node qc/driver.js ...` process (quote values with spaces). They must end
+  on the screen they start from: leak-loop aborts if an iteration leaves the
+  app (a `back` / `key --code BACK` on the root screen, or a back pressed before
+  the pushed screen appeared: add `sleep --ms`), and fails if the app process
+  changes (a crash). `key --code BACK` needs only adb; `back`, `tap` and
+  `wait-for` need the Appium session.
 
 Screenshots land in `<run>/screenshots/`, numbered in capture order, and the
 driver prints each path. That path, relative to `<run>/`, is what the report's
@@ -376,8 +541,10 @@ device).
 
 **Gotchas:**
 
-- Elements with no testID or label are absent from the accessibility tree.
-  Coordinate-tap them, and record every missing testID as a finding:
+- Elements with no testID or label are absent from the plain tree dump
+  (`dump-tree.js --all` shows them, with a `class-index` you can pass to
+  `input --class ... --index`). `audit-ids` lists them with a command for each;
+  coordinate-tap the controls, and record every missing testID as a finding:
   `node qc/state.js ABC-123 finding yellow '<Component> missing testID ...'`.
 - A repeated testID across list items? Scope with `--within <container-testID>`
   (bounds-based, so it survives view flattening).

@@ -93,6 +93,18 @@
             }
           }
         },
+        "rest": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Jira over REST (qc/tracker.js) instead of agent tools. Credentials come from environment variables, never from this file.",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "baseUrlEnv": { "type": "string", "default": "JIRA_BASE_URL", "description": "Env var holding the Jira site URL." },
+            "emailEnv": { "type": "string", "default": "JIRA_EMAIL", "description": "Env var holding the account email." },
+            "tokenEnv": { "type": "string", "default": "JIRA_API_TOKEN", "description": "Env var holding the API token." },
+            "acceptanceField": { "type": "string", "default": "", "description": "Custom field id holding acceptance criteria, e.g. customfield_10040. Empty: they are read from the description." }
+          }
+        },
         "passLabel": {
           "type": "string",
           "default": "QC-Agent-Pass",
@@ -156,6 +168,34 @@
         "prCommand": {
           "type": "string",
           "description": "Command that opens a pull request, for example \"gh pr create --fill\". Empty means derive from the git remote and print the URL instead of opening one."
+        },
+        "host": {
+          "type": "string",
+          "enum": ["", "github", "bitbucket", "none"],
+          "default": "",
+          "description": "Where pull requests live, for `qc-check run pr <n>` and PR review comments (runtime/pr.js). github uses the gh CLI; bitbucket uses the Bitbucket Cloud REST API. Empty detects it from the git remote."
+        },
+        "remote": {
+          "type": "string",
+          "default": "origin",
+          "description": "The git remote whose URL names the PR host, the owner or workspace, and the repository. build.js also fetches branches from it."
+        },
+        "bitbucket": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Bitbucket Cloud basic auth. Holds the NAMES of environment variables, never their values.",
+          "properties": {
+            "emailEnv": {
+              "type": "string",
+              "default": "BITBUCKET_EMAIL",
+              "description": "Environment variable holding the Atlassian account email."
+            },
+            "tokenEnv": {
+              "type": "string",
+              "default": "BITBUCKET_API_TOKEN",
+              "description": "Environment variable holding an Atlassian API token with pull request read (and, to comment, write) scope."
+            }
+          }
         }
       }
     },
@@ -186,6 +226,17 @@
             },
             "ios": {
               "type": "string"
+            },
+            "worktreeDir": {
+              "type": "string",
+              "default": "",
+              "description": "Where runtime/build.js keeps one git worktree per branch under test, relative to the repo root or absolute. Empty means a per-repo folder in the OS temp dir. It must not be the repository or a parent of it."
+            },
+            "copyFiles": {
+              "type": "array",
+              "items": { "type": "string" },
+              "default": [],
+              "description": "Gitignored files (or folders) the build needs, copied from the main checkout into each worktree, for example [\"env/dev.json\"]. They are never committed."
             }
           }
         },
@@ -328,6 +379,19 @@
               "type": "object",
               "description": "Constant fields merged into the login body."
             },
+            "bodyEncoding": {
+              "type": "string",
+              "enum": ["json", "form"],
+              "default": "json",
+              "description": "How the login body is sent. form sends application/x-www-form-urlencoded, as OAuth token endpoints expect."
+            },
+            "headers": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "Headers sent on the login request only, such as an OAuth client Basic header. Values may reference secrets with ${env:NAME} or ${file:path#KEY}."
+            },
             "sessionHeaders": {
               "type": "object",
               "additionalProperties": {
@@ -336,6 +400,10 @@
               "description": "Request header name to dot-path in the login response, for a gateway that issues a per-session fingerprint or CSRF value at login. Same path syntax as tokenPath."
             }
           }
+        },
+        "guestAuth": {
+          "type": "object",
+          "description": "Optional login that needs no account, used by api.js --guest (e.g. an OAuth client_credentials grant). Keys as in auth: path, method, bodyEncoding, extraBody, headers, tokenPath."
         },
         "headers": {
           "type": "object",
@@ -347,6 +415,12 @@
         "smokePath": {
           "type": "string",
           "description": "Cheap authenticated GET used to prove a real round trip."
+        },
+        "redactKeys": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Extra body key names api.js masks in saved and printed responses (matched case-insensitively, ignoring punctuation)."
         },
         "protectedEnvs": {
           "type": "array",
@@ -409,6 +483,52 @@
         }
       }
     },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Static PR scan (qc/review-scan.js) for the code-review phase. It prints leads, not findings.",
+      "properties": {
+        "lintCommand": {
+          "type": "string",
+          "default": "",
+          "description": "Linter run by review-scan.js (always when set, or with --lint). {files} becomes the changed files, shell-quoted. Empty with --lint: flutter/dart analyze for a pubspec.yaml repo, npx eslint -f unix when package.json has eslint."
+        },
+        "layers": {
+          "type": "array",
+          "default": [],
+          "description": "Import rules. Empty: built-in data/domain/presentation rules when the repo has <src>/features/*/{data,domain,presentation}.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "files", "mustNotImport"],
+            "properties": {
+              "name": { "type": "string" },
+              "files": { "type": "string", "description": "Glob (**, *, ?, {a,b}) of the files the rule applies to, repo-relative." },
+              "mustNotImport": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Globs matched against the resolved repo-relative import path, or substrings of the import (e.g. package:dio/)."
+              },
+              "why": { "type": "string" }
+            }
+          }
+        },
+        "disable": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Rule ids to skip, e.g. debug-leftover; lint or layer-import skips every lint:* or layer-import:* rule."
+        },
+        "maxFileLines": { "type": "integer", "minimum": 1, "default": 600 },
+        "maxFunctionLines": { "type": "integer", "minimum": 1, "default": 80 },
+        "httpClientDirs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["lib/core/network", "lib/core/di", "src/api", "src/network"],
+          "description": "Directories allowed to construct an HTTP client (Dio, http.Client, axios.create); elsewhere it is a di-bypass lead."
+        }
+      }
+    },
     "budget": {
       "type": "object",
       "additionalProperties": false,
@@ -421,6 +541,43 @@
           "type": "number",
           "default": 30,
           "description": "Soft cap for one run. Past it the run prefers finishing the report over more test cases."
+        }
+      }
+    },
+    "perf": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Limits for the device driver's perf, mem, startup and leak-loop probes (Android). A flag on the command overrides each one.",
+      "properties": {
+        "maxJankPct": {
+          "type": "number",
+          "minimum": 0,
+          "default": 10,
+          "description": "perf fails when more than this percentage of frames is janky."
+        },
+        "maxP90Ms": {
+          "type": "number",
+          "minimum": 0,
+          "default": 32,
+          "description": "perf fails when the 90th percentile frame time is over this many milliseconds."
+        },
+        "maxMemGrowthMb": {
+          "type": "number",
+          "minimum": 0,
+          "default": 25,
+          "description": "mem --compare and leak-loop fail when TOTAL PSS grows by more than this many MB (an Activity, ViewRootImpl or AppContext count that grows fails too)."
+        },
+        "maxColdStartMs": {
+          "type": "number",
+          "minimum": 0,
+          "default": 4000,
+          "description": "startup fails when the median launch time is over this many milliseconds. Debug builds are only indicative."
+        },
+        "leakLoopTimes": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 10,
+          "description": "How many times leak-loop repeats its steps when --times is not given."
         }
       }
     },
@@ -451,6 +608,12 @@
         },
         "caps": {
           "$ref": "#/definitions/capsOverride"
+        },
+        "emulatorArgs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Extra flags driver.js health --fix passes to the emulator on a cold boot, for example [\"-gpu\", \"swiftshader_indirect\"]."
         }
       }
     },

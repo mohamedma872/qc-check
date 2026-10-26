@@ -23,12 +23,15 @@ const {
   credentialsPathOf,
 } = require('./util');
 const { resolveEnv, guardProtected, runKey, peekRun, buildFor, isProtected } = require('./envs');
+const { resolvePrTarget } = require('./pr-target');
 
 // The phase documents SKILL.md tells the agent to read when it gets there.
 const REFERENCES = [
+  ['code-review', 'code-review.md'],
   ['test-plan', 'test-plan.md'],
   ['contract / smoke', 'backend-contract.md'],
   ['phone / tablet / ios', 'device-driving.md'],
+  ['baseline (each device FAIL)', 'baseline.md'],
   ['unit-tests', 'unit-tests.md'],
   ['report / publish', 'reporting.md'],
   ['full sweep mode', 'full-sweep.md'],
@@ -44,6 +47,11 @@ function resolveTarget(positionals) {
 
   if (first === 'fix') {
     return { mode: 'fix', id: (list[1] || '').toUpperCase(), label: `fix ${(list[1] || '').toUpperCase()}` };
+  }
+  if (first === 'pr') {
+    // The ticket id needs the PR itself; resolvePrTarget() (cli/pr-target.js) fills it in.
+    const n = String(list[1] || '').replace(/^#/, '');
+    return { mode: 'pr', pr: n, id: null, label: `PR #${n}` };
   }
   if (first === 'all' || first === 'full' || first === 'sweep') {
     return { mode: 'sweep', id: 'FULL-SWEEP', label: 'full-app sweep' };
@@ -64,7 +72,7 @@ function targetSection(target) {
       'read the `full-sweep.md` reference FIRST, use the pseudo-ticket',
       '`FULL-SWEEP` for all state and evidence file names, build the screen',
       'inventory instead of fetching a ticket, use the per-screen checklist as',
-      'the test plan, and skip the contract and unit-test phases.',
+      'the test plan, and skip the code-review, contract and unit-test phases.',
     ].join('\n');
   }
   if (target.mode === 'fix') {
@@ -77,6 +85,7 @@ function targetSection(target) {
       'finding is closed. Backend-side findings stay reported, not fixed.',
     ].join('\n');
   }
+  if (target.mode === 'pr') return prTargetSection(target);
   return [
     `## Your target: ${target.id}`,
     '',
@@ -84,6 +93,50 @@ function targetSection(target) {
     `file name, starting with \`node ${RUNTIME_DIR}/state.js ${target.id} get\``,
     'to pick up a run that may already be part-done.',
   ].join('\n');
+}
+
+// A run started from a pull request: the PR is the ticket (or points at one)
+// and its source branch, not the current checkout, is what gets tested.
+function prTargetSection(target) {
+  const pr = target.pr || {};
+  const n = pr.number;
+  const fromKey = target.idSource === 'title' || target.idSource === 'branch';
+  const out = [
+    `## Your target: pull request #${n} (ticket ${target.id})`,
+    '',
+    `The argument is \`pr ${n}\`. This run's ticket comes from pull request #${n}`,
+    `"${pr.title || ''}"${pr.url ? ` (${pr.url})` : ''}, by ${pr.author || 'unknown'}.`,
+    '',
+    `Branch under test: ${pr.sourceBranch} (head ${String(pr.commit || '').slice(0, 12) || '?'}), merging into ${pr.targetBranch}.`,
+    'Test THAT branch, not whatever the repository root has checked out. The code',
+    `under test is \`git diff origin/${pr.targetBranch}...origin/${pr.sourceBranch}\` (after a fetch).`,
+    '',
+  ];
+  if (fromKey) {
+    out.push(
+      `- Phase 1: the PR ${target.idSource} names tracker ticket ${target.id}. Fetch that ticket as`,
+      `  usual, then run \`node ${RUNTIME_DIR}/pr.js get ${n} --save\`: with a tracker ticket.md`,
+      '  already in the run folder it saves the PR beside it as pr.md. Use both.',
+    );
+  } else {
+    out.push(
+      `- Phase 1: there is no tracker ticket. \`node ${RUNTIME_DIR}/pr.js get ${n} --save\` writes the`,
+      '  PR as <run>/ticket.md: treat it as the ticket. Where the description states no',
+      '  acceptance criteria, derive them from the diff and say so in the plan.',
+    );
+  }
+  out.push(
+    `- Build: \`node ${RUNTIME_DIR}/build.js prepare --branch ${pr.sourceBranch}\`, then`,
+    `  \`node ${RUNTIME_DIR}/build.js run --platform android\` (and/or ios). It builds in its own`,
+    '  worktree, skips an unchanged commit and fails with ERROR: when the install did not',
+    '  land. Never git checkout, stash or reset in the repository root.',
+    `- Publish: post the review comment with \`node ${RUNTIME_DIR}/pr.js comment ${n} --file <comment>\``,
+    '  (check it first with --dry-run). Use --update <commentId> to edit an earlier one.',
+    '',
+    `Use ${target.id} for every state, plan, evidence and report file name, starting`,
+    `with \`node ${RUNTIME_DIR}/state.js ${target.id} get\` to pick up a run that may already be part-done.`,
+  );
+  return out.join('\n');
 }
 
 // ------------------------------------------------------------------ config
@@ -295,7 +348,7 @@ function layoutSection(host, cfg) {
   out.push(`Run every \`node ${RUNTIME_DIR}/...\` command from there.`);
   out.push('');
   out.push('Runtime scripts (each takes --help):');
-  for (const f of ['driver.js', 'dump-tree.js', 'api.js', 'config.js', 'state.js', 'cost.js', 'runs.js']) {
+  for (const f of ['driver.js', 'dump-tree.js', 'api.js', 'config.js', 'state.js', 'cost.js', 'runs.js', 'pr.js', 'build.js', 'review-scan.js']) {
     out.push(`  ${path.join(host, RUNTIME_DIR, f)}`);
   }
   out.push(`  ${path.join(host, RUNTIME_DIR, 'record.sh')}`);
@@ -370,11 +423,12 @@ async function run(args) {
   const host = findHost(args);
   const cfg = readConfig(host, { required: true });
 
-  const target = resolveTarget(args._);
+  let target = resolveTarget(args._);
   if (!target) {
-    fail('no target. Pass a ticket id (ABC-123), "all", or "fix <RUN-ID>".');
+    fail('no target. Pass a ticket id (ABC-123), "all", "pr <n>", or "fix <RUN-ID>".');
     return;
   }
+  if (target.mode === 'pr') target = resolvePrTarget(host, target);
   if (target.mode === 'fix' && !target.id) {
     fail('"fix" needs a run id, for example `qc-check prompt fix ABC-123`.');
     return;
@@ -404,6 +458,7 @@ Usage
 
 Targets
   ABC-123            QC one ticket
+  pr <n>             QC pull request <n>: its ticket key, else the PR itself as the ticket
   all | full | sweep QC every screen, no ticket
   fix <RUN-ID>       fix what a previous run found
 
@@ -422,6 +477,7 @@ can read files.
 Examples
   qc-check prompt ABC-123
   qc-check prompt ABC-123 | pbcopy
+  qc-check prompt pr 42 --out /tmp/qc-pr.txt
   qc-check prompt all --out /tmp/qc-sweep.txt`);
 }
 

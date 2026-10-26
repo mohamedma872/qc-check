@@ -262,6 +262,151 @@ try {
     assert(/env/.test(out), 'env-var credentials not reported');
   });
 
+  check('a form-encoded login sends secret-referenced headers and masks them', () => {
+    const cfgPath = path.join(host, 'qc.config.json');
+    const original = fs.readFileSync(cfgPath, 'utf8');
+    const portFile = path.join(home, 'mock-port');
+    const logFile = path.join(home, 'mock-log.json');
+    fs.writeFileSync(path.join(host, 'secrets.json'), JSON.stringify({ BASIC: 'Basic c2VjcmV0LWNsaWVudA==' }));
+    // A stand-in OAuth server: it only issues a token for a form body carrying
+    // the referenced Basic header, then serves one Bearer-protected read.
+    const server = require('child_process').spawn(process.execPath, ['-e', `
+      const http = require('http'); const fs = require('fs');
+      const srv = http.createServer((req, res) => {
+        let body = ''; req.on('data', c => { body += c; });
+        req.on('end', () => {
+          fs.writeFileSync(${JSON.stringify(logFile)}, JSON.stringify({ url: req.url, headers: req.headers, body }));
+          if (req.url === '/oauth/token') {
+            const ok = req.headers['content-type'] === 'application/x-www-form-urlencoded'
+              && req.headers.authorization === 'Basic c2VjcmV0LWNsaWVudA=='
+              && req.headers['x-client'] === 'from-env'
+              && (body === 'grant_type=password&scope=basic&username=qa&password=pw-secret'
+                || body === 'grant_type=client_credentials&scope=basic');
+            res.writeHead(ok ? 200 : 400, { 'content-type': 'application/json' });
+            res.end(JSON.stringify(ok ? { access_token: 'tok-abcdef-123456' } : { error: 'bad login', body }));
+          } else {
+            const ok = req.headers.authorization === 'Bearer tok-abcdef-123456';
+            res.writeHead(ok ? 200 : 401, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ ok, seen: req.headers.authorization || null }));
+          }
+        });
+      });
+      srv.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portFile)}, String(srv.address().port)));
+    `], { stdio: 'ignore' });
+    try {
+      const deadline = Date.now() + 5000;
+      while (!fs.existsSync(portFile) && Date.now() < deadline) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+      }
+      assert(fs.existsSync(portFile), 'mock server did not start');
+      const port = fs.readFileSync(portFile, 'utf8');
+      const cfg = JSON.parse(original);
+      cfg.backend = {
+        ...cfg.backend,
+        enabled: true,
+        defaultEnv: 'uat',
+        baseUrls: { ...(cfg.backend && cfg.backend.baseUrls), uat: `http://127.0.0.1:${port}` },
+        smokePath: '/me',
+        auth: {
+          path: '/oauth/token',
+          bodyEncoding: 'form',
+          extraBody: { grant_type: 'password', scope: 'basic' },
+          headers: { Authorization: '${file:secrets.json#BASIC}', 'X-Client': '${env:QC_TEST_CLIENT}' },
+          tokenPath: 'access_token',
+        },
+      };
+      fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+      const env = { ...process.env, QC_ENV: 'uat', QC_TEST_CLIENT: 'from-env', QC_CRED_UAT_USERNAME: 'qa', QC_CRED_UAT_PASSWORD: 'pw-secret' };
+      const r = runSoft([path.join(host, 'qc', 'api.js'), '--smoke'], { cwd: host, env });
+      assert(r.status === 0, `smoke failed (exit ${r.status}): ${r.out.slice(0, 200)}`);
+      assert(/"ok": true/.test(r.out), 'authenticated read did not succeed');
+      for (const secret of ['c2VjcmV0LWNsaWVudA==', 'pw-secret', 'tok-abcdef-123456']) {
+        assert(!r.out.includes(secret), `a secret reached the output: ${secret.slice(0, 4)}...`);
+      }
+      cfg.backend.guestAuth = { bodyEncoding: 'form', extraBody: { grant_type: 'client_credentials', scope: 'basic' },
+        headers: { Authorization: '${file:secrets.json#BASIC}', 'X-Client': '${env:QC_TEST_CLIENT}' } };
+      fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+      const guestEnv = { ...env }; delete guestEnv.QC_CRED_UAT_USERNAME; delete guestEnv.QC_CRED_UAT_PASSWORD;
+      const g = runSoft([path.join(host, 'qc', 'api.js'), '--guest', '--smoke'], { cwd: host, env: guestEnv });
+      assert(g.status === 0 && /"ok": true/.test(g.out), `guest smoke failed (exit ${g.status}): ${g.out.slice(0, 160)}`);
+      assert(!g.out.includes('tok-abcdef-123456') && !g.out.includes('c2VjcmV0LWNsaWVudA=='), 'a guest secret reached the output');
+      delete env.QC_TEST_CLIENT;
+      const missing = runSoft([path.join(host, 'qc', 'api.js'), '--token'], { cwd: host, env });
+      assert(missing.status === 1 && /\$\{env:QC_TEST_CLIENT\} did not resolve/.test(missing.out), 'an unresolved reference was not refused');
+    } finally {
+      server.kill();
+      fs.writeFileSync(cfgPath, original);
+      fs.rmSync(path.join(host, 'secrets.json'), { force: true });
+    }
+  });
+
+  check('jira over REST fetches, saves and publishes a ticket without leaking the token', () => {
+    const cfgPath = path.join(host, 'qc.config.json');
+    const original = fs.readFileSync(cfgPath, 'utf8');
+    const portFile = path.join(home, 'jira-port');
+    const logFile = path.join(home, 'jira-log.txt');
+    const server = require('child_process').spawn(process.execPath, ['-e', `
+      const http = require('http'); const fs = require('fs');
+      const ok = 'Basic ' + Buffer.from('qa@example.com:jira-secret-token').toString('base64');
+      const srv = http.createServer((req, res) => {
+        let body = ''; req.on('data', c => { body += c; });
+        req.on('end', () => {
+          fs.appendFileSync(${JSON.stringify(logFile)}, req.method + ' ' + req.url + ' ' + (req.headers['content-type'] || '') + '\\n');
+          const send = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(obj ? JSON.stringify(obj) : ''); };
+          if (req.headers.authorization !== ok) return send(401, { errorMessages: ['bad auth'] });
+          if (req.url === '/rest/api/3/myself') return send(200, { displayName: 'QA Bot' });
+          if (req.url.startsWith('/rest/api/3/issue/ABC-123?')) return send(200, { key: 'ABC-123', fields: {
+            summary: 'Apply a coupon', status: { name: 'In Progress' }, issuetype: { name: 'Story' },
+            description: { type: 'doc', content: [
+              { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'Acceptance Criteria' }] },
+              { type: 'bulletList', content: [{ type: 'listItem', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Coupon reduces the total' }] }] }] } ] },
+            issuelinks: [], subtasks: [], attachment: [] } });
+          if (req.url === '/rest/api/2/issue/ABC-123/comment' && req.method === 'POST') return send(201, { id: '42' });
+          if (req.url === '/rest/api/3/issue/ABC-123/attachments' && req.method === 'POST') return send(200, [{ id: '7' }]);
+          if (req.url === '/rest/api/3/issue/ABC-123' && req.method === 'PUT') return send(204);
+          send(404, { errorMessages: ['nope'] });
+        });
+      });
+      srv.listen(0, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(portFile)}, String(srv.address().port)));
+    `], { stdio: 'ignore' });
+    try {
+      const deadline = Date.now() + 5000;
+      while (!fs.existsSync(portFile) && Date.now() < deadline) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+      }
+      assert(fs.existsSync(portFile), 'mock jira did not start');
+      const cfg = JSON.parse(original);
+      cfg.tracker = { ...cfg.tracker, kind: 'jira', rest: { enabled: true, baseUrlEnv: 'QC_T_URL', emailEnv: 'QC_T_EMAIL', tokenEnv: 'QC_T_TOKEN' } };
+      fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+      const runDir = run([path.join(host, 'qc', 'runs.js'), 'open', 'ABC-123'], { cwd: host }).trim().split('\n').pop();
+      const env = { ...process.env, QC_RUN_DIR: runDir, QC_T_URL: `http://127.0.0.1:${fs.readFileSync(portFile, 'utf8')}`,
+        QC_T_EMAIL: 'qa@example.com', QC_T_TOKEN: 'jira-secret-token' };
+      const tr = a => runSoft([path.join(host, 'qc', 'tracker.js'), ...a], { cwd: host, env });
+      const all = [];
+      const checkOut = tr(['check']); all.push(checkOut.out);
+      assert(checkOut.status === 0 && /QA Bot/.test(checkOut.out), `check failed: ${checkOut.out.slice(0, 120)}`);
+      const got = tr(['get', 'abc-123', '--save']); all.push(got.out);
+      assert(got.status === 0, `get failed: ${got.out.slice(0, 160)}`);
+      const saved = fs.readFileSync(path.join(runDir, 'ticket.md'), 'utf8');
+      assert(/# ABC-123 - Apply a coupon/.test(saved) && /## Acceptance Criteria/.test(saved) && /- Coupon reduces the total/.test(saved), 'ticket.md is not the converted ticket');
+      const report = path.join(home, 'report.md'); fs.writeFileSync(report, 'QC Agent Report - ABC-123');
+      const c = tr(['comment', 'ABC-123', '--file', report]); all.push(c.out);
+      assert(c.status === 0 && /comment 42/.test(c.out), `comment failed: ${c.out.slice(0, 120)}`);
+      const at = tr(['attach', 'ABC-123', report]); all.push(at.out);
+      assert(at.status === 0, `attach failed: ${at.out.slice(0, 120)}`);
+      const lb = tr(['labels', 'ABC-123', '--add', 'QC-Agent-Pass', '--remove', 'BE-Blocking']); all.push(lb.out);
+      assert(lb.status === 0, `labels failed: ${lb.out.slice(0, 120)}`);
+      assert(/multipart\/form-data/.test(fs.readFileSync(logFile, 'utf8')), 'attachment was not sent as multipart');
+      const bad = runSoft([path.join(host, 'qc', 'tracker.js'), 'check'], { cwd: host, env: { ...env, QC_T_TOKEN: 'wrong-token' } });
+      all.push(bad.out);
+      assert(bad.status === 2, 'a refused token should exit 2');
+      assert(!all.join('\n').includes('jira-secret-token') && !all.join('\n').includes('wrong-token'), 'a token reached the output');
+    } finally {
+      server.kill();
+      fs.writeFileSync(cfgPath, original);
+    }
+  });
+
   check('a protected environment is refused without the flag', () => {
     const cfg = JSON.parse(fs.readFileSync(path.join(host, 'qc.config.json'), 'utf8'));
     cfg.app.flavors.prod = { androidPackage: 'com.example.app', iosBundleId: '' };

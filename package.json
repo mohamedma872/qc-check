@@ -1,6 +1,6 @@
 {
   "name": "qc-check",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Run mobile QC on a real device from one CLI. An AI agent drives your app through Appium, verifies the backend contract, and produces an evidence-backed report. Install with a shell script, no npm required.",
   "bin": {
     "qc-check": "bin/qc-check.js"
@@ -20,7 +20,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node test/smoke.js",
+    "test": "node test/smoke.js && node test/intake.js && node test/review.js && node test/driver.js && node test/scan.js && node test/perf.js",
     "check:leaks": "node test/no-private-refs.js"
   },
   "keywords": [

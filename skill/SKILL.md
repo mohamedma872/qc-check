@@ -134,6 +134,7 @@ with its `dir`). It is written `<run>/` below.
       report.md                   final report, the evidence record (you write it)
       review.md                   plain-language comment for the ticket and PR (you write it)
       screenshots/001-name.png    driver.js screenshot --name <name>
+                                  (NNN-base-<case>.png: the same case re-run on the default-branch build, baseline.md)
       recordings/001-name.mp4     record.sh stop <name>
       trees/001-name.txt          dump-tree.js --save <name>
       api/001-name.json           api.js ... --save <name>, redacted
@@ -172,7 +173,8 @@ stopped. Five mechanisms, all mandatory:
    Then tell the user what already passed and **resume at the `phase/sub-step`
    it suggests**. Do not redo a green smoke test, a passed phone run, or the
    sub-steps a phase already cleared. An approved `test-plan` stays approved;
-   do not re-ask. The ONLY paths to a fresh start are `get` printing "fresh
+   do not re-ask. A run that started before the `code-review` phase existed
+   shows it as skipped; do not go back to it. The ONLY paths to a fresh start are `get` printing "fresh
    run", or the user explicitly asking for a full re-run, and then
    `node qc/state.js ABC-123 reset` comes first.
 
@@ -230,16 +232,17 @@ stopped. Five mechanisms, all mandatory:
 
 | # | Phase (`state.js` name) | What | Default sub-steps | Read first |
 |---|---|---|---|---|
-| 1 | `ticket` | Get the ticket ID and fetch the ticket | `derive-id, fetch-ticket, read-code` | below |
-| 2 | `test-plan` | Write DoD and numbered test cases to `<run>/plan.md`. **Gate: THE USER MUST APPROVE before anything below runs** | `dod, test-cases, write-md, approval` | `references/test-plan.md` |
-| 3 | `contract` | Verify the app-to-backend REST contract: code, backend ticket, live gateway | `identify-write, be-ref, live-check, verdict` | `references/backend-contract.md` |
-| 4 | `smoke` | Backend live smoke test. **Gate: red means STOP, never boot emulators** | `health, auth, roundtrip, verdict` | `references/backend-contract.md` |
-| 5 | `phone` | Full device pass on the Android phone profile (`config.devices.android`). **Required** | `preflight, connect, login, record, case-1…N, teardown` | `references/device-driving.md` |
-| 6 | `tablet` | Android tablet pass (`config.devices.android_tablet`) plus responsive checks. **Only if explicitly requested** | same as `phone` | `references/device-driving.md` |
-| 7 | `ios` | iOS pass on a simulator or iPhone (`config.devices.ios`). **Only if explicitly requested** | same as `phone` | `references/device-driving.md` |
-| 8 | `unit-tests` | Extend the unit suites for the ticket's new logic | `identify-units, extend-suites, run-green, commit` | `references/unit-tests.md` |
-| 9 | `report` | Assemble the QC report, then the plain-language review comment | `assemble` | `references/reporting.md` |
-| 10 | `publish` | Post the review comment and attach the report and evidence to the tracker, labels gated by verdict | `comment, attachments, labels, confirm` | `references/reporting.md` |
+| 1 | `ticket` | Get the ticket ID and fetch the ticket (or the pull request) | `derive-id, fetch-ticket, read-code` | below |
+| 2 | `code-review` | Review the PR diff for correctness plus six areas: security (OWASP Mobile Top 10), performance, memory leaks, concurrency, code standards, architecture. `review-scan.js` finds the mechanical leads; verify each. Risks become `Repro:` cases, perf and memory risks become `Probe:` cases, standards and architecture go straight to the report. No approval needed | `read-diff, scan, risks, repro-cases` | `references/code-review.md` |
+| 3 | `test-plan` | Write DoD and numbered test cases to `<run>/plan.md`, including every code-review repro case. **Gate: THE USER MUST APPROVE before anything below runs** | `dod, test-cases, write-md, approval` | `references/test-plan.md` |
+| 4 | `contract` | Verify the app-to-backend REST contract: code, backend ticket, live gateway | `identify-write, be-ref, live-check, verdict` | `references/backend-contract.md` |
+| 5 | `smoke` | Backend live smoke test. **Gate: red means STOP, never boot emulators** | `health, auth, roundtrip, verdict` | `references/backend-contract.md` |
+| 6 | `phone` | Full device pass on the Android phone profile (`config.devices.android`). **Required.** Every FAIL is re-run on a build of `config.repo.defaultBranch`: new in this PR, already there, or worse | `preflight, connect, login, record, case-1…N, teardown` | `references/device-driving.md`, `references/baseline.md` |
+| 7 | `tablet` | Android tablet pass (`config.devices.android_tablet`) plus responsive checks. **Only if explicitly requested** | same as `phone` | `references/device-driving.md` |
+| 8 | `ios` | iOS pass on a simulator or iPhone (`config.devices.ios`). **Only if explicitly requested** | same as `phone` | `references/device-driving.md` |
+| 9 | `unit-tests` | Extend the unit suites for the ticket's new logic, plus a failing repro test for each logic FAIL | `identify-units, extend-suites, run-green, commit` (+ `repro-tests` when a case failed) | `references/unit-tests.md` |
+| 10 | `report` | Assemble the QC report, then the plain-language review comment | `assemble` | `references/reporting.md` |
+| 11 | `publish` | Post the review comment and attach the report and evidence to the tracker and the pull request, labels gated by verdict | `comment, attachments, labels, confirm` | `references/reporting.md` |
 
 Read each reference **when you reach that phase**, not all up front. If
 `node qc/state.js ABC-123 get` shows different sub-step names for a phase, the
@@ -268,6 +271,16 @@ node -e "process.exit(require('./qc/config.js').validateTicket(process.argv[1])?
 
 Then fetch the ticket:
 
+- `config.tracker.kind` is `jira` **and** `config.tracker.rest.enabled` is
+  true: fetch it over REST, every run, and keep the copy with the run:
+  ```bash
+  node qc/tracker.js get ABC-123 --save   # writes <run>/ticket.md, prints the same markdown
+  ```
+  Read the description (and the acceptance-criteria field when
+  `config.tracker.rest.acceptanceField` is set) for the acceptance criteria,
+  linked issues such as backend sub-tasks and "blocked by", and design links.
+  Exit 2 means the Jira token in the environment was refused: stop and tell the
+  user which variable to fix. Never print it.
 - `config.tracker.kind` is `jira` or `github` **and**
   `config.tracker.tools.getIssue` is non-empty: call that tool by that exact
   name with the ticket ID, against `config.tracker.site` and
@@ -298,7 +311,44 @@ meaning the service call under `config.codeMap.apiServicesGlob` and the
 mutation hook under `config.codeMap.mutationsGlob`. Flag any interactive
 element missing a `testID` as a finding.
 
-### Phase 2: test plan (DoD and test cases; hard user-approval gate)
+**Started from a pull request** (`qc-check run pr <n>`, or the user names a PR):
+
+- Ticket id: `node qc/pr.js id <n>`. It prints a tracker key found in the PR
+  title or source branch, else the pseudo-id `PR-<n>`. Use that id for every
+  state and evidence file name.
+- If it is a tracker key, fetch that ticket as usual, then
+  `node qc/pr.js get <n> --save`. With a tracker `ticket.md` already in the run
+  folder, the PR is saved as `pr.md` beside it. Read both.
+- If it is `PR-<n>`, `node qc/pr.js get <n> --save` writes the PR as
+  `<run>/ticket.md`, and that is the ticket. Where the description gives no
+  acceptance criteria, derive them from
+  `git diff origin/<target>...origin/<source>` and say so in the plan.
+
+**Build the branch under test in its own worktree**, whether the run started
+from a PR or a ticket whose branch is not checked out:
+`node qc/build.js prepare --branch <source>`, then
+`node qc/build.js run --platform android` (or `ios`). It builds outside the
+repository root, skips a commit already built and installed, and verifies the
+install. An `ERROR:` from `build.js` (app did not update, adb
+`Exception`/`Failure`, "Can't find service") means the device is NOT running
+the build under test: stop and fix that before any device phase. Never
+`git checkout`, `git stash` or `git reset` in the repository root.
+`node qc/build.js clean` removes the worktrees when the run is done.
+
+### Phase 2: code review (before the plan)
+
+Follow `references/code-review.md`. Using the diff from `read-code`, run
+`node qc/review-scan.js --base <base> --lint --save` for the mechanical leads,
+then review the diff for correctness and for the six areas: security (OWASP
+Mobile Top 10), performance, memory leaks, concurrency, code standards and
+architecture. Record each verified risk as a yellow finding that starts with
+its area key. Turn correctness and concurrency risks into `Repro:` cases and
+performance and memory risks into `Probe:` cases (`driver.js perf`, `mem`,
+`leak-loop`, `startup`), all of which the plan must include. Code standards
+and architecture findings need no test case. No approval is needed for this phase. Skip it only when there is no
+diff (full sweep, or no code change): `set code-review skipped <reason>`.
+
+### Phase 3: test plan (DoD and test cases; hard user-approval gate)
 
 Follow `references/test-plan.md`. Derive the **Definition of Done** from the
 acceptance criteria, write **numbered test cases** using the real selectors
@@ -309,7 +359,7 @@ question and blocks on the reply. `state.js` refuses to start any later phase
 until `test-plan` is `pass`. The approved file is also the live progress board:
 later phases flip its DoD and case status cells as they resolve.
 
-### Phases 3 and 4: backend contract and smoke, mandatory before any emulator
+### Phases 4 and 5: backend contract and smoke, mandatory before any emulator
 
 A green UI is **not** a pass for any feature that writes data. The endpoint may
 not exist, or may not be deployed on the QC environment. And booting emulators
@@ -329,7 +379,7 @@ against a dead backend wastes many minutes. Follow
   smoke request to keep its response as evidence in `<run>/api/`, with
   tokens and credentials redacted.
 
-### Phases 5 to 7: device passes, phone required, tablet and iOS on request
+### Phases 6 to 8: device passes, phone required, tablet and iOS on request
 
 Run each form factor as its **own task and own pass**: connect, record, test
 cases, stop recording, disconnect. The Android phone profile is **required**.
@@ -357,7 +407,7 @@ Everything else
 device-side (connect, login, language and RTL rounds, permissions, offline
 mode, per-host gotchas) is in `references/device-driving.md`.
 
-### Phases 8 to 10: tests, report, publish
+### Phases 9 to 11: tests, report, publish
 
 Follow `references/unit-tests.md`. The logic worth covering lives under
 `config.codeMap.apiServicesGlob`, `config.codeMap.mutationsGlob`,
@@ -377,7 +427,9 @@ Publish degrades with the tracker:
 
 | `config.tracker.kind` and tools | Publish does |
 |---|---|
+| `jira` with `config.tracker.rest.enabled` | The same steps through `node qc/tracker.js`: `comment ABC-123 --file <run>/review.md`, `attach ABC-123 <run>/report.md <files>`, `labels ABC-123 --add <label> [--remove <label>]`, then confirm the write back to the user |
 | A tracker, and `config.tracker.tools.addComment` non-empty | Post `review.md` as a comment, attach `report.md` and the evidence with `config.tracker.tools.uploadAttachment`, apply `config.tracker.passLabel` or `config.tracker.blockedLabel` with `config.tracker.tools.addLabels` per the verdict, then confirm the write back to the user |
+| Pull request (run started from a PR, or a PR exists for the branch) | `node qc/pr.js comment <n> --file <run>/review.md`: GitHub via `gh`, Bitbucket Cloud via REST. Run it with `--dry-run` first. `--update <commentId>` edits an earlier QC comment instead of adding another. Skipped in eval mode |
 | A tracker, but a tool name is empty | Do what is available. For the rest, print the exact text and file paths for the user to paste, and mark those sub-steps `skipped no <tool> configured` |
 | `none` | Nothing external to write. `set publish skipped no tracker configured`, then tell the user where the report and evidence are: `<run>/report.md`, `<run>/review.md` and the evidence folders beside it |
 
@@ -397,7 +449,12 @@ node qc/driver.js <cmd>                 # tap/input/assert/screenshot/swipe/conn
 node qc/dump-tree.js [--grep x] [--save name]   # live accessibility tree; --save keeps it in <run>/trees/
 node qc/api.js --health                 # is the configured gateway up? gate for the smoke phase
 node qc/api.js --smoke                  # login, then the authenticated read at backend.smokePath
-node qc/api.js GET|POST <path> [--save name]    # authenticated REST; --save keeps it in <run>/api/
+node qc/api.js GET|POST <path> [--save name]    # authenticated REST; --save keeps it in <run>/api/, tokens and body secrets masked
+node qc/api.js ... --raw                # body unmasked, for piping; never into a report (warns)
+node qc/pr.js get|id|comment <n>        # read a pull request, derive its ticket id, post the review comment
+node qc/review-scan.js [--base b] --save # static leads on the diff (security, perf, memory, races, standards, layers); verify each
+node qc/driver.js perf|mem|leak-loop|startup   # jank, memory, leak loop, start time on Android (exit 3 = over the config.perf limit)
+node qc/build.js prepare|run|status|clean   # build a branch in its own worktree and verify the install
 node qc/runs.js current                 # this run: ticket, env, id and folder, as JSON
 node qc/config.js --json                # the resolved config, after defaults are merged
 node qc/config.js --reports-dir         # absolute root of all runs, created if missing

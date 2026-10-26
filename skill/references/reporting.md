@@ -44,9 +44,12 @@ Recordings: recordings/001-phone.mp4[ · recordings/002-tablet.mp4] (attached to
 | TC1 | ... | PASS / FAIL / BLOCKED | screenshots/004-tc1-saved.png, api/002-tc1-readback.json |
 
 (Numbering mirrors the approved plan, plan.md. Add a
-Tablet/iOS column when those passes ran. FAIL: Expected vs Actual. BLOCKED: the
+Tablet/iOS column when those passes ran. FAIL: Expected vs Actual, plus the
+baseline verdict from `references/baseline.md`: "new in this PR", "already on
+<base>", "worse in this PR", or "baseline not checked (<reason>)". BLOCKED: the
 blocker and whose scope it is. A requested form factor that could not be built
-or booted is BLOCKED, not a pass.)
+or booted is BLOCKED, not a pass. `Repro:` cases come from the code review: a
+FAIL there confirms the predicted bug, a PASS disproves it.)
 
 ## Definition of Done
 | # | Done means | Status |
@@ -59,11 +62,23 @@ board)
 ## Unit tests
 - PASS: extended <Suite> (+N cases), covers <...>, `<config.codeMap.testCommand> <pattern>` green
 - YELLOW: <new logic> left to device QC (no unit test), reason
+- RED (expected): [QC-REPRO ABC-123] <name> fails with <actual vs expected>, on branch qc-repro/ABC-123-<slug> (red until the bug is fixed; see `references/unit-tests.md`)
 
 ## Findings
 - RED Backend: <exact status and body of the failing route, e.g. POST /v1/vehicle returns 404 on staging>, needs fix or redeploy
 - YELLOW Code quality: <Component> missing testIDs or a11y labels, suggested ids
 - YELLOW QC tooling: <driver gap encountered>
+- RED App: <bug seen on device>, confirms code-review finding "<short text>"; baseline: new in this PR
+- YELLOW Code review, not reproduced: <predicted bug>, TC<n> passed / could not be run (reason)
+- RED Performance: <flow> probe failed: <metric> <value> vs <threshold> on <build type>; base build <value>; new in this PR
+- YELLOW Security (OWASP M<n> <name>): <what is exposed and where>, <file>; suggestion
+- YELLOW Memory: <screen> leak loop grew <n> MB over <times> visits (base <n> MB) / <controller> never disposed in <file>
+- YELLOW Concurrency, not reproduced: <race>, <file>:<function>
+- YELLOW Code standards: <n> new lint issues on added lines (<rules>), <files>
+- YELLOW Architecture: <layer rule> broken by <n> new imports (<files>); the codebase already has <n>
+
+Use these prefixes so every finding names its review area. One finding per
+rule for standards and architecture, with the files listed, not one per line.
 
 ## Overall: PASS / FAIL / BLOCKED - [brief verdict + next step]
 
@@ -117,21 +132,33 @@ work, what must change before merge, and how to see the problem themselves.
   is no internet"), not what the code does. Put the priority in brackets after
   the title, using one of these words: `(must fix)`, `(please fix)`,
   `(minor)`, `(heads-up)`.
-- **Under each title, at most three short parts:**
-  - what happens, from the user's side, including how to reproduce it if
-    that is not obvious;
+- **Under each title, at most four short parts:**
+  - what happens, from the user's side, in one or two sentences;
+  - *How to reproduce:* 1 to 3 numbered steps the developer can follow on
+    their own phone, starting from a screen they can find ("Open any category
+    list", not "launch with `~plp-screen`"). Include how to force the
+    condition in plain words ("turn on airplane mode", "tap Save twice
+    quickly"), and end with what to look for. **Required on every must-fix
+    item;** optional elsewhere, and leave it out when the title already says
+    it all;
   - *Why:* one line naming the cause, with at most one file or function name
-    so the developer can find it;
+    so the developer can find it. Add the baseline verdict at the end of this
+    line when it is known: "New in this PR.", "Already on <base>, not caused
+    by this PR." or "Also on <base>, but worse in this PR." (see
+    `references/baseline.md`). When a failing unit test shows the bug, say
+    where in one clause ("a failing test is on branch `qc-repro/...`");
   - *Suggestion:* one line with the fix.
 - **Split the list when there is a merge gate:** a "Must fix before merge"
   group first, then "Worth fixing", then a "Waiting on backend" or "Heads-up"
-  group for things outside the PR's control.
+  group for things outside the PR's control. A bug that is already on
+  `<base>` goes under "Worth fixing", not "Must fix", unless the PR was meant
+  to fix it.
 - **Plain words over internal terms.** Say "spinner", "product page", "the
   list mixes up results", not `DialogRoute`, `PdpBloc`, `hasReachedMax`. One
   code identifier per item at most, in backticks, only where it helps someone
   find the code. No test-case ids (`TC7`), DoD ids, run ids, sub-step names,
   evidence paths or cost lines; those stay in `report.md`.
-- **Short.** Aim for under about 30 lines. If a finding needs more, it belongs
+- **Short.** Aim for under about 30 lines, not counting the reproduce steps. If a finding needs more, it belongs
   in `report.md`, and the comment points there.
 - **Name only what you observed or verified.** Mark code-review findings you
   did not reproduce on a device as such ("may", "from the code"), and say what
@@ -150,16 +177,37 @@ Tested on <device> with the <env> build. **<One sentence: what works.>**
 <There are N problems to fix before merging: | A few things to improve:>
 
 **1. <What the user sees>** (must fix)
-<What happens, and how to reproduce it in one line.>
-*Why:* <cause, with at most one `file` or `function`>.
+<What happens, in one or two sentences.>
+*How to reproduce:*
+1. <Open a screen anyone can find.>
+2. <Force the condition, in plain words.>
+3. <Do the action; look for the symptom.>
+*Why:* <cause, with at most one `file` or `function`>. <New in this PR. | Already on <base>, not caused by this PR. | Also on <base>, but worse in this PR.>
 *Suggestion:* <the fix>.
 
 **2. <...>** (minor)
 <...>
 
+**Code health** (from reading the code; none of these break the feature today):
+- **Security:** <OWASP category in plain words, e.g. "the login token is stored unencrypted">, `<file>`. <Suggestion.>
+- **Performance:** <e.g. "the new list builds every item up front; with 200 items it stutters">. <Suggestion.>
+- **Memory:** <e.g. "the scroll listener is never removed, so each visit to the page leaks it">. <Suggestion.>
+- **Concurrency:** <e.g. "a fast second tap on Apply starts a second request; the slower one wins">. <Suggestion.>
+- **Code standards:** <e.g. "3 new analyzer warnings and a leftover print">. <Files.>
+- **Architecture:** <e.g. "the cart screen imports the data layer directly (the codebase has 34 of these already; please don't add more)">.
+
 **Waiting on backend:**
 <What is missing on <env>, and what needs a re-test once it lands.>
 ```
+
+The **Code health** group lists only the review areas that have a verified
+finding; leave the others out rather than writing "none". A code-health item
+that was reproduced on device or failed a probe (a leak loop that grew, a
+race that showed the wrong result) is not code health any more: it moves up
+to a numbered problem with *How to reproduce*. Write each item as the effect
+on users or on the next developer, not as the rule name: "the token is
+stored unencrypted", not "M9 insecure storage". Keep the OWASP id for
+`report.md`.
 
 When the run passed with nothing to fix, the comment is two lines: the verdict
 sentence and "No issues found." Do not pad it.
@@ -174,6 +222,11 @@ string, there is nothing to publish to.** Skip the `publish` phase
 report and its evidence on disk in `<run>/`, and tell the user the run folder,
 the `report.md` and `summary.json` paths, plus the one-paragraph verdict. That
 is a complete, successful run.
+
+When `config.tracker.rest.enabled` is true (Jira over REST), every step below
+goes through `node qc/tracker.js` instead of a tool:
+`comment ABC-123 --file <run>/review.md`, `attach ABC-123 <run>/report.md <file>...`
+(several files per call is fine), and `labels ABC-123 --add <label> --remove <label>`.
 
 Otherwise the tool names come from the config and you call them as your agent
 calls tools (an MCP tool name, a CLI, or an HTTP call, depending on the host):
@@ -193,9 +246,12 @@ calls tools (an MCP tool name, a CLI, or an HTTP call, depending on the host):
    file: `<run>/report.md`, the per-case screenshots (the report's Evidence
    column, from `<run>/screenshots/`) and the session recordings in
    `<run>/recordings/`. Attach `api/` files only when a finding needs them.
-   Tokens and credentials are redacted, but a response body can still carry
-   secrets (a config endpoint that returns API keys, for example), so open each
-   one first and never attach a file that holds a key. Note in the sub-step
+   Tokens and credentials are redacted, and body values under secret-looking
+   keys (`apiKey`, `secret`, `token`, `siteKey`, `{key, value}` config entries
+   named like one, plus `config.backend.redactKeys`) are saved as a short
+   prefix and length, such as `f8c8…(32)`. That masking goes by key name, so a
+   secret under an innocent name still gets through: open each file first and
+   never attach one that holds a full key. Note in the sub-step
    which files landed. If uploads are unavailable, say so and keep the paths in
    the comment.
 

@@ -20,8 +20,11 @@
 //   --env <name>     key in backend.baseUrls (default: QC_ENV, then backend.defaultEnv)
 //   --data '<json>'  request body for POST/PUT/PATCH
 //   --lang <code>    Accept-Language, and substituted for {lang} in backend.headers
-//   --raw            print the raw body (compact, for piping)
+//   --raw            print the raw body (compact, for piping); body secrets stay
+//                    unmasked, with a warning on stderr
 //   --unauth         skip login (route-existence probes: 401 means the route is deployed)
+//   --guest          log in with backend.guestAuth (e.g. an OAuth client_credentials
+//                    grant) instead of the environment's account
 //   --reveal         with --token only: print the token unmasked (never do this into a report)
 //   --timeout <ms>   per-request timeout (default 20000)
 //   --save <name>    also write the response, redacted, to the run's api/ folder
@@ -33,6 +36,129 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const https = require('https');
+
+// --- body redaction (pure; exported for test/review.js) -------------------------
+//
+// Tokens and credentials this run learned are scrubbed by value (redact()
+// below). A response BODY can also carry secrets the run never saw: a config
+// endpoint that hands out vendor API keys, a captcha site key, a refresh
+// token. redactBody() masks those by the key they sit under, keeping a short
+// prefix and the length so the evidence still shows which value came back.
+//
+// Key names are compared normalised: lowercased, with everything but letters
+// and digits removed, so api_key, apiKey, API-KEY and some.vendor.api.key all
+// read as "apikey" / "somevendorapikey".
+//
+// - STRONG names always mean a secret: the value is masked whatever it looks
+//   like (strings always, numbers when the name ends in the secret word).
+// - WEAK names (exactly "key", ending in "key", or a clientId) are as often an i18n key or
+//   a sort key as a credential, so their value is masked only when it looks
+//   like one (see looksSecret): "key": "category.page.title" survives.
+// - A pair entry { key|name: <name>, value: <v> } is judged by <name>: a strong
+//   name masks the value, a weak one masks it when it looks secret.
+// - A JWT is masked wherever it appears.
+// - backend.redactKeys in qc.config.json adds names, treated as STRONG and
+//   matched as a substring of the normalised key.
+const STRONG_ANYWHERE = /(password|passwd|passphrase|secret|apikey|privatekey|accesskey|sitekey|signingkey|encryptionkey)/;
+const STRONG_SUFFIX = /(token|otp|pwd|authorization|cookie|credential|credentials|sessionid)$/;
+const WEAK_SUFFIX = /(key|clientid)$/;
+const PAIR_NAME_FIELDS = ['key', 'name'];
+const PAIR_VALUE_FIELDS = ['value', 'val'];
+const JWT = /^eyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]*$/;
+
+function normKey(k) {
+  return String(k == null ? '' : k).toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function extraNames(extra) {
+  return (Array.isArray(extra) ? extra : []).map(normKey).filter(Boolean);
+}
+
+// 'strong' | 'weak' | null
+function keyClass(name, extra) {
+  const n = normKey(name);
+  if (!n) { return null; }
+  if (STRONG_ANYWHERE.test(n) || STRONG_SUFFIX.test(n)) { return 'strong'; }
+  if (extraNames(extra).some(x => n.includes(x))) { return 'strong'; }
+  if (WEAK_SUFFIX.test(n)) { return 'weak'; }
+  return null;
+}
+
+function isSecretKey(name, extra) {
+  return keyClass(name, extra) === 'strong';
+}
+
+// Opaque-credential shape: one token of at least 16 characters, no spaces, not
+// a URL, and either one long alphanumeric run (hex, base64) or a mix of
+// digits and both letter cases. Dotted i18n keys and words fail it.
+function looksSecret(value) {
+  if (typeof value !== 'string') { return false; }
+  const v = value.trim();
+  if (v.length < 16 || /\s/.test(v) || /:\/\//.test(v)) { return false; }
+  if (!/^[A-Za-z0-9+/=_\-.~:]+$/.test(v)) { return false; }
+  const longestRun = Math.max(...v.split(/[^A-Za-z0-9]/).map(s => s.length));
+  if (longestRun >= 16 && /\d/.test(v)) { return true; }
+  if (longestRun >= 24) { return true; }
+  return v.length >= 20 && /\d/.test(v) && /[a-z]/.test(v) && /[A-Z]/.test(v);
+}
+
+function maskValue(value) {
+  const s = String(value);
+  if (s.length <= 8) { return `…(${s.length})`; }
+  return `${s.slice(0, 4)}…(${s.length})`;
+}
+
+function shouldMask(cls, name, value) {
+  if (value === null || value === undefined || typeof value === 'boolean') { return false; }
+  if (typeof value === 'object') { return false; }
+  if (cls === 'strong') {
+    if (typeof value === 'string') { return value.length > 0; }
+    // a number under passwordMinLength is a policy; under otp it is the secret
+    return typeof value === 'number' && (STRONG_SUFFIX.test(normKey(name)) || /(password|passwd|pin)$/.test(normKey(name)));
+  }
+  if (cls === 'weak') { return looksSecret(value); }
+  return false;
+}
+
+// Returns { body, masked } where masked lists the key names (never values)
+// whose values were masked, for a warning or a test.
+function redactBody(value, extra) {
+  const masked = [];
+  const walk = (v, d) => {
+    if (d > 30 || v === null || typeof v !== 'object') {
+      if (typeof v === 'string' && JWT.test(v)) { masked.push('(jwt)'); return maskValue(v); }
+      return v;
+    }
+    if (Array.isArray(v)) { return v.map(x => walk(x, d + 1)); }
+    const nameField = PAIR_NAME_FIELDS.find(f => typeof v[f] === 'string');
+    const valueField = PAIR_VALUE_FIELDS.find(f => f in v);
+    // a name with spaces is a label ("Secret Santa"), not a config key
+    const pairClass = nameField && valueField && !/\s/.test(v[nameField]) ? keyClass(v[nameField], extra) : null;
+    const out = {};
+    for (const [k, x] of Object.entries(v)) {
+      if (pairClass && k === valueField && shouldMask(pairClass, v[nameField], x)) {
+        masked.push(v[nameField]);
+        out[k] = maskValue(x);
+        continue;
+      }
+      const cls = keyClass(k, extra);
+      if (cls && shouldMask(cls, k, x)) {
+        masked.push(k);
+        out[k] = maskValue(x);
+        continue;
+      }
+      out[k] = walk(x, d + 1);
+    }
+    return out;
+  };
+  return { body: walk(value, 0), masked };
+}
+
+if (require.main !== module) {
+  module.exports = { redactBody, isSecretKey, keyClass, looksSecret, maskValue, normKey };
+  // Required as a library (tests): stop before the CLI parses argv or loads config.
+  return;
+}
 
 const args = process.argv.slice(2);
 
@@ -49,18 +175,25 @@ const HELP = [
   '  --env <name>      key in backend.baseUrls (default: QC_ENV, then backend.defaultEnv)',
   '  --data \'<json>\'   request body for POST/PUT/PATCH',
   '  --lang <code>     Accept-Language; also replaces {lang} in backend.headers values',
-  '  --raw             print the raw response body',
+  '  --raw             print the response body unmasked (secrets this run learned',
+  '                    are still hidden); warns on stderr when it holds secret-looking',
+  '                    values. Without it, secrets in the body are masked as with --save.',
   '  --unauth          skip login (401 on a probe still proves the route is deployed)',
+  '  --guest           log in with backend.guestAuth (no account), for guest-user flows',
   '  --reveal          print the full token with --token (unsafe for logs and reports)',
   '  --timeout <ms>    per-request timeout, default 20000',
   '  --save <name>     with GET/POST/PUT/PATCH/DELETE, --smoke or --health: write the',
   '                    response to the run\'s api/ folder (001-<name>.json) as',
   '                    { request: { method, path, env }, status, headers, body },',
-  '                    with the token, credentials and session headers masked.',
+  '                    with the token, credentials and session headers masked, and',
+  '                    secret-looking body values (keys such as apiKey, secret,',
+  '                    token, siteKey, {key,value} config entries) shown as a',
+  '                    4-character prefix and length, e.g. "f8c8…(32)".',
+  '                    backend.redactKeys adds key names to mask.',
   '                    Request bodies and login responses are never saved.',
   '  --help            this text',
   '',
-  'Config: backend.{baseUrls,healthPath,auth,headers,smokePath} in qc.config.json.',
+  'Config: backend.{baseUrls,healthPath,auth,headers,smokePath,redactKeys} in qc.config.json.',
   'Credentials: QC_CRED_<ENV>_USERNAME/_PASSWORD, else the gitignored file named by',
   'credentialsFile (set with `qc-check env credentials <env>`; never printed).',
   'Exit codes: 0 ok | 1 usage/config/network | 2 auth failed | 3 gateway down | 4 HTTP >= 400',
@@ -149,27 +282,65 @@ const APP_VERSION = repoPackageVersion();
 // a second language header) get them from backend.headers. {lang} and
 // {version} are substituted so a per-request value can live in a constant.
 function expand(value) {
-  return String(value).replace(/\{lang\}/g, LANG).replace(/\{version\}/g, APP_VERSION);
+  return resolveSecretRefs(String(value).replace(/\{lang\}/g, LANG).replace(/\{version\}/g, APP_VERSION));
 }
 
-function buildHeaders(data, auth) {
+// A header value may name a secret instead of holding it, so qc.config.json
+// stays safe to commit: ${env:NAME} reads an environment variable, and
+// ${file:path#KEY} reads KEY from a JSON file relative to the repo root (for
+// example a gitignored env/dev.json the app build already uses). Resolved
+// values are scrubbed from everything this script prints or saves.
+const REPO_ROOT = cfg.configPath ? path.dirname(cfg.configPath) : process.cwd();
+function resolveSecretRefs(text) {
+  return text.replace(/\$\{(env|file):([^}]+)\}/g, (ref, kind, target) => {
+    let value;
+    if (kind === 'env') {
+      value = process.env[target];
+    } else {
+      const [file, key] = target.split('#');
+      try {
+        value = dig(JSON.parse(fs.readFileSync(path.resolve(REPO_ROOT, file), 'utf8')), key || '');
+      } catch { value = undefined; }
+    }
+    if (value == null || value === '' || typeof value === 'object') {
+      console.error(`header reference ${ref} did not resolve: ${kind === 'env' ? 'set that environment variable' : 'check the file exists and holds that key'}`);
+      process.exit(1);
+    }
+    remember(String(value));
+    return String(value);
+  });
+}
+
+function buildHeaders(data, auth, opts) {
   const configured = {};
   for (const [k, v] of Object.entries(backend.headers || {})) { configured[k] = expand(v); }
+  const extra = {};
+  for (const [k, v] of Object.entries((opts && opts.headers) || {})) { extra[k] = expand(v); }
   return {
     Accept: 'application/json',
-    'Content-Type': 'application/json',
+    'Content-Type': (opts && opts.contentType) || 'application/json',
     'User-Agent': `qc-check-agent/${APP_VERSION}`,
     'Accept-Language': LANG,
     ...configured,
+    ...extra,
     ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}),
     ...(auth && auth.token ? { Authorization: `Bearer ${auth.token}` } : {}),
     ...(auth && auth.headers ? auth.headers : {}),
   };
 }
 
-function request(method, urlPath, body, auth) {
+// opts.form sends an object body as application/x-www-form-urlencoded (OAuth
+// token endpoints) instead of JSON. opts.headers apply to this request only.
+function request(method, urlPath, body, auth, opts) {
   return new Promise((resolve, reject) => {
-    const data = body == null ? null : (typeof body === 'string' ? body : JSON.stringify(body));
+    const form = Boolean(opts && opts.form);
+    const data = body == null ? null
+      : typeof body === 'string' ? body
+        : form ? new URLSearchParams(body).toString() : JSON.stringify(body);
+    const headerOpts = {
+      headers: opts && opts.headers,
+      contentType: form ? 'application/x-www-form-urlencoded' : undefined,
+    };
     let url;
     try { url = new URL(BASE + urlPath); } catch { reject(new Error(`bad URL: ${BASE}${urlPath}`)); return; }
     const transport = url.protocol === 'http:' ? http : https;
@@ -181,7 +352,7 @@ function request(method, urlPath, body, auth) {
         path: url.pathname + url.search,
         method,
         timeout: TIMEOUT_MS,
-        headers: buildHeaders(data, auth),
+        headers: buildHeaders(data, auth, headerOpts),
       },
       res => {
         let raw = '';
@@ -270,7 +441,32 @@ function credentialBlock() {
   return creds;
 }
 
+// A guest session: backend.guestAuth describes a login that needs no account
+// (typically an OAuth client_credentials grant). Same keys as backend.auth,
+// minus the credential fields.
+async function guestLogin() {
+  const g = backend.guestAuth || {};
+  const loginPath = g.path || authCfg.path;
+  const tokenPath = g.tokenPath || authCfg.tokenPath;
+  if (!loginPath || !tokenPath) {
+    console.error('--guest needs backend.guestAuth.path and tokenPath (or backend.auth ones) in qc.config.json');
+    process.exit(1);
+  }
+  const method = String(g.method || 'POST').toUpperCase();
+  const res = await request(method, loginPath, { ...(g.extraBody || {}) }, null,
+    { form: String(g.bodyEncoding || 'json').toLowerCase() === 'form', headers: g.headers });
+  let token = resolveFromResponse(tokenPath, res);
+  if (token) { token = String(token).replace(/^Bearer\s+/i, ''); }
+  if (res.status >= 300 || !token) {
+    console.error(`AUTHFAIL (HTTP ${res.status}) on guest ${method} ${loginPath}: ${redact(String(res.raw).slice(0, 300))}`);
+    process.exit(2);
+  }
+  remember(token);
+  return { token, headers: {} };
+}
+
 async function login() {
+  if (args.includes('--guest')) { return guestLogin(); }
   const loginPath = authCfg.path;
   const tokenPath = authCfg.tokenPath;
   // Defaulting these would send credentials to a guessed route, so demand them.
@@ -287,7 +483,12 @@ async function login() {
     [authCfg.usernameField || 'username']: username,
     [authCfg.passwordField || 'password']: password,
   };
-  const res = await request(method, loginPath, body, null);
+  const encoding = String(authCfg.bodyEncoding || 'json').toLowerCase();
+  if (!['json', 'form'].includes(encoding)) {
+    console.error(`backend.auth.bodyEncoding must be "json" or "form", not "${authCfg.bodyEncoding}"`);
+    process.exit(1);
+  }
+  const res = await request(method, loginPath, body, null, { form: encoding === 'form', headers: authCfg.headers });
   let token = resolveFromResponse(tokenPath, res);
   if (token) { token = String(token).replace(/^Bearer\s+/i, ''); }
   if (res.status >= 300 || !token) {
@@ -344,9 +545,11 @@ if (args.includes('--save') && (!SAVE_NAME || SAVE_NAME.startsWith('--'))) {
 // Header names whose values authenticate a caller. Their values are dropped
 // from a saved file whatever the gateway sends back.
 const SENSITIVE_HEADER = /^(authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token|x-access-token|x-refresh-token|x-csrf-token|x-xsrf-token)$/i;
-// Body keys that commonly carry a secret, masked even when this run never saw
-// the value (a refresh token, a second session id).
-const SENSITIVE_KEY = /(pass(word)?|secret|token|authorization|cookie|api[-_]?key|otp)/i;
+// Extra body key names to mask (backend.redactKeys), on top of the built-in
+// list in redactBody(). Read defensively: a bad value means no extras.
+const REDACT_KEYS = Array.isArray(backend.redactKeys)
+  ? backend.redactKeys.filter(k => typeof k === 'string' && k.trim())
+  : [];
 
 function sensitiveHeaderNames() {
   const names = new Set(Object.keys(authCfg.sessionHeaders || {}).map(n => n.toLowerCase()));
@@ -355,17 +558,6 @@ function sensitiveHeaderNames() {
     if (typeof p === 'string' && /^headers\./i.test(p)) { names.add(p.slice('headers.'.length).toLowerCase()); }
   }
   return names;
-}
-
-function maskKeys(value, depth) {
-  const d = depth || 0;
-  if (d > 20 || value === null || typeof value !== 'object') { return value; }
-  if (Array.isArray(value)) { return value.map(v => maskKeys(v, d + 1)); }
-  const out = {};
-  for (const [k, v] of Object.entries(value)) {
-    out[k] = SENSITIVE_KEY.test(k) && v !== null && typeof v !== 'object' ? '***' : maskKeys(v, d + 1);
-  }
-  return out;
 }
 
 function pathOnly(p) {
@@ -390,7 +582,7 @@ function saveResponse(method, urlPath, res, extra) {
     }
     const text = redact(res.raw == null ? '' : res.raw);
     let body;
-    try { body = maskKeys(JSON.parse(text)); } catch { body = text; }
+    try { body = redactBody(JSON.parse(text), REDACT_KEYS).body; } catch { body = text; }
     const record = {
       request: { method, path: redact(urlPath), env: ENV },
       status: res.status,
@@ -409,15 +601,30 @@ function saveResponse(method, urlPath, res, extra) {
   }
 }
 
+// The pretty print masks body secrets like --save does. --raw prints the body
+// as received (minus the secrets this run learned), for piping, and warns on
+// stderr when it held values the masked forms would hide. Key names only.
 function printBody(raw) {
   const text = redact(raw);
+  let parsed;
+  let isJson = true;
+  try { parsed = JSON.parse(text); } catch { isJson = false; }
   if (args.includes('--raw')) {
     console.log(text);
+    if (isJson) {
+      const { masked } = redactBody(parsed, REDACT_KEYS);
+      if (masked.length) {
+        const names = [...new Set(masked)];
+        console.error(`WARN: --raw printed ${masked.length} secret-looking value(s) unmasked ` +
+          `(under: ${names.slice(0, 8).join(', ')}${names.length > 8 ? ', ...' : ''}). ` +
+          'Never copy this output into a report, a comment or a finding; use --save for evidence.');
+      }
+    }
     return;
   }
-  try {
-    console.log(JSON.stringify(JSON.parse(text), null, 2));
-  } catch {
+  if (isJson) {
+    console.log(JSON.stringify(redactBody(parsed, REDACT_KEYS).body, null, 2));
+  } else {
     console.log(text || '(empty body)');
   }
 }

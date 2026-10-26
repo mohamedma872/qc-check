@@ -21,7 +21,7 @@
 // evidence files in the run dir. A re-run after ANY interruption resumes from
 // here - it never starts from scratch.
 //
-// Canonical phases: ticket, test-plan, contract, smoke, phone, tablet, ios, unit-tests, report, publish
+// Canonical phases: ticket, code-review, test-plan, contract, smoke, phone, tablet, ios, unit-tests, report, publish
 // Statuses: pending | in_progress | pass | fail | blocked | skipped
 //
 // Sub-steps: each phase has default sub-steps (seeded when the phase first goes
@@ -32,13 +32,20 @@
 //
 // Gate: no phase after test-plan can go in_progress/pass until test-plan is
 // pass (the user approved the DoD + test cases in <run dir>/plan.md) or
-// skipped (legacy runs started before this phase existed).
+// skipped (legacy runs started before this phase existed). code-review sits
+// before test-plan and needs no approval.
+//
+// Older state files: a state.json written before code-review existed has no
+// entry for it. When such a run is already past it (test-plan or a later phase
+// has moved beyond pending), code-review reads as skipped with a note, so the
+// resume point stays where the run actually was. It is written back on the
+// next save.
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
 
-const PHASES = ['ticket', 'test-plan', 'contract', 'smoke', 'phone', 'tablet', 'ios', 'unit-tests', 'report', 'publish'];
+const PHASES = ['ticket', 'code-review', 'test-plan', 'contract', 'smoke', 'phone', 'tablet', 'ios', 'unit-tests', 'report', 'publish'];
 const STATUSES = ['pending', 'in_progress', 'pass', 'fail', 'blocked', 'skipped'];
 // pass/blocked/skipped = resolved; pending/in_progress/fail = still needs work (resume here)
 const UNRESOLVED = ['pending', 'in_progress', 'fail'];
@@ -46,6 +53,7 @@ const UNRESOLVED = ['pending', 'in_progress', 'fail'];
 const DEVICE_STEPS = ['preflight', 'connect', 'login', 'record', 'cases', 'teardown'];
 const DEFAULT_STEPS = {
   ticket: ['derive-id', 'fetch-ticket', 'read-code'],
+  'code-review': ['read-diff', 'scan', 'risks', 'repro-cases'],
   'test-plan': ['dod', 'test-cases', 'write-md', 'approval'],
   contract: ['identify-write', 'be-ref', 'live-check', 'verdict'],
   smoke: ['health', 'auth', 'roundtrip', 'verdict'],
@@ -107,9 +115,24 @@ let file = path.join(run.dir, 'state.json');
 // Paths in messages are relative to the cwd so a human can paste them straight back.
 const rel = p => path.relative(process.cwd(), p) || '.';
 
+// Phases added after a run started read as skipped once the run is past them.
+// Pure: takes and returns a state object.
+const ADDED_PHASES = { 'code-review': 'run predates the code-review phase' };
+function upgrade(state) {
+  if (!state || typeof state !== 'object') {return state;}
+  state.phases = state.phases || {};
+  for (const [phase, note] of Object.entries(ADDED_PHASES)) {
+    if (state.phases[phase]) {continue;}
+    const later = PHASES.slice(PHASES.indexOf(phase) + 1);
+    const past = later.some(p => state.phases[p] && state.phases[p].status && state.phases[p].status !== 'pending');
+    if (past) {state.phases[phase] = { status: 'skipped', note, updatedAt: new Date().toISOString() };}
+  }
+  return state;
+}
+
 function load() {
   if (!fs.existsSync(file)) {return null;}
-  return JSON.parse(fs.readFileSync(file, 'utf8'));
+  return upgrade(JSON.parse(fs.readFileSync(file, 'utf8')));
 }
 
 function fresh() {

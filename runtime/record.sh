@@ -53,12 +53,22 @@ SESSION_INFO=$(node -e '
 const fs = require("fs");
 const s = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
 if (!s.sessionId) { console.error("session file has no sessionId"); process.exit(1); }
-process.stdout.write([s.sessionId, s.host || "", s.port || ""].join(" "));
+process.stdout.write([s.sessionId, s.host || "-", s.port || "-", s.serial || "-"].join(" "));
 ' "$SESSION_FILE") || exit 1
 
 SID=$(echo "$SESSION_INFO" | awk '{print $1}')
 HOST=$(echo "$SESSION_INFO" | awk '{print $2}')
 PORT=$(echo "$SESSION_INFO" | awk '{print $3}')
+SERIAL=$(echo "$SESSION_INFO" | awk '{print $4}')
+[ "$HOST" = "-" ] && HOST=""
+[ "$PORT" = "-" ] && PORT=""
+[ "$SERIAL" = "-" ] && SERIAL=""
+# The device connect pinned (Android). Exported so any adb call made from here,
+# by this script or a tool it runs, targets that device and never another one
+# attached to the same host.
+if [ -n "$SERIAL" ]; then
+  export ANDROID_SERIAL="$SERIAL"
+fi
 [ -n "$HOST" ] || HOST=$(node "$SCRIPT_DIR/config.js" --appium-host 2>/dev/null || echo 127.0.0.1)
 [ -n "$PORT" ] || PORT=$(node "$SCRIPT_DIR/config.js" --appium-port 2>/dev/null || echo 4723)
 APPIUM="http://$HOST:$PORT"
@@ -81,7 +91,7 @@ case "${1:-}" in
     if echo "$RESP" | grep -q '"error"'; then
       echo "WARN: start_recording_screen failed ($(echo "$RESP" | head -c 120)) - continuing with screenshots only"
     else
-      echo "REC: recording (limit ${LIMIT}s)"
+      echo "REC: recording (limit ${LIMIT}s)${SERIAL:+ on $SERIAL}"
     fi
     ;;
   stop)

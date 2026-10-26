@@ -31,7 +31,10 @@
     "timeoutMinutes": 180
   },
   "repo": {
-    "defaultBranch": "main"
+    "defaultBranch": "main",
+    "host": "",
+    "remote": "origin",
+    "bitbucket": { "emailEnv": "BITBUCKET_EMAIL", "tokenEnv": "BITBUCKET_API_TOKEN" }
   },
   "app": {
     "defaultFlavor": "staging",
@@ -39,7 +42,9 @@
     "envBanner": "",
     "build": {
       "android": "yarn android:{flavor}",
-      "ios": "yarn ios:{flavor}"
+      "ios": "yarn ios:{flavor}",
+      "worktreeDir": "",
+      "copyFiles": ["env/{flavor}.json"]
     },
     "flavors": {
       "staging": {
@@ -110,9 +115,31 @@
     "typecheckCommand": "npx tsc --noEmit --skipLibCheck",
     "testsGitignored": false
   },
+  "review": {
+    "lintCommand": "",
+    "layers": [
+      {
+        "name": "screens-use-hooks",
+        "files": "src/screens/**",
+        "mustNotImport": ["src/api/services/**"],
+        "why": "screens go through the query/mutation hooks, not the API services."
+      }
+    ],
+    "disable": [],
+    "maxFileLines": 600,
+    "maxFunctionLines": 80,
+    "httpClientDirs": ["src/api"]
+  },
   "budget": {
     "currency": "USD",
     "runCap": 30
+  },
+  "perf": {
+    "maxJankPct": 10,
+    "maxP90Ms": 32,
+    "maxMemGrowthMb": 25,
+    "maxColdStartMs": 4000,
+    "leakLoopTimes": 10
   },
   "credentialsFile": "qc.credentials.js"
 }

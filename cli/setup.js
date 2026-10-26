@@ -30,12 +30,18 @@ function baseConfig() {
       blockedLabel: 'BE-Blocking',
     },
     agent: { kind: 'none', command: '', extraArgs: [], headless: false, timeoutMinutes: 180 },
-    repo: { defaultBranch: 'main', prCommand: '' },
+    repo: {
+      defaultBranch: 'main',
+      prCommand: '',
+      host: '',
+      remote: 'origin',
+      bitbucket: { emailEnv: 'BITBUCKET_EMAIL', tokenEnv: 'BITBUCKET_API_TOKEN' },
+    },
     app: {
       defaultFlavor: 'staging',
       androidActivity: '',
       envBanner: '',
-      build: { android: '', ios: '' },
+      build: { android: '', ios: '', worktreeDir: '', copyFiles: [] },
       flavors: {},
     },
     devices: {
@@ -75,6 +81,7 @@ function baseConfig() {
       testsGitignored: false,
     },
     budget: { currency: 'USD', runCap: 30 },
+    perf: { maxJankPct: 10, maxP90Ms: 32, maxMemGrowthMb: 25, maxColdStartMs: 4000, leakLoopTimes: 10 },
     credentialsFile: 'qc.credentials.js',
   };
 }

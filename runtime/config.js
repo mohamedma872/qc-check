@@ -34,12 +34,19 @@ const DEFAULTS = {
     site: '',
     projectKey: '',
     tools: { getIssue: '', addComment: '', addLabels: '', uploadAttachment: '' },
+    // Jira over REST with an API token from the environment, instead of tools.
+    rest: { enabled: false, baseUrlEnv: 'JIRA_BASE_URL', emailEnv: 'JIRA_EMAIL', tokenEnv: 'JIRA_API_TOKEN', acceptanceField: '' },
     passLabel: 'QC-Agent-Pass',
     blockedLabel: 'BE-Blocking',
   },
   repo: {
     defaultBranch: 'main',
     prCommand: '',
+    // github | bitbucket | none; empty detects it from the remote below.
+    host: '',
+    remote: 'origin',
+    // Bitbucket Cloud basic auth: the NAMES of the env vars, never the values.
+    bitbucket: { emailEnv: 'BITBUCKET_EMAIL', tokenEnv: 'BITBUCKET_API_TOKEN' },
   },
   app: {
     defaultFlavor: 'staging',
@@ -47,7 +54,9 @@ const DEFAULTS = {
     // On-screen marker that tells the tester which environment the running
     // build points at; empty when the app shows none.
     envBanner: '',
-    build: { android: '', ios: '' },
+    // worktreeDir: where build.js keeps per-branch worktrees (empty: the OS
+    // temp dir). copyFiles: gitignored files copied in from the main checkout.
+    build: { android: '', ios: '', worktreeDir: '', copyFiles: [] },
     // Left empty on purpose: a phantom default flavor would silently drive the
     // wrong build. An unknown flavor must fail loudly instead.
     flavors: {},
@@ -55,8 +64,8 @@ const DEFAULTS = {
   devices: {
     // `caps` is a free-form Appium capability block merged last in capsFor(),
     // so an unusual device can be accommodated without a schema change.
-    android: { enabled: true, avd: '', udid: '', deviceName: 'Android Phone', caps: {} },
-    android_tablet: { enabled: false, avd: '', udid: '', deviceName: 'Android Tablet', caps: {} },
+    android: { enabled: true, avd: '', udid: '', deviceName: 'Android Phone', caps: {}, emulatorArgs: [] },
+    android_tablet: { enabled: false, avd: '', udid: '', deviceName: 'Android Tablet', caps: {}, emulatorArgs: [] },
     // realDevice drives a physical iPhone (Xcode 27 Device Hub lists both
     // kinds). Appium then has to sign WebDriverAgent, hence the team fields.
     ios: {
@@ -83,9 +92,13 @@ const DEFAULTS = {
       passwordField: 'password',
       tokenPath: '',
       extraBody: {},
+      bodyEncoding: 'json',
+      headers: {},
     },
     headers: {},
     smokePath: '',
+    // Extra response-body key names api.js masks, on top of its built-in list.
+    redactKeys: [],
     // Environments a run may not target without an explicit override. Names
     // that look like production are protected even when not listed.
     protectedEnvs: [],
@@ -104,7 +117,19 @@ const DEFAULTS = {
     typecheckCommand: '',
     testsGitignored: false,
   },
+  // Static PR scan (review-scan.js). Empty layers means "use the built-in
+  // feature/data/domain/presentation rules when the repo has that layout".
+  review: {
+    lintCommand: '',
+    layers: [],
+    disable: [],
+    maxFileLines: 600,
+    maxFunctionLines: 80,
+    httpClientDirs: ['lib/core/network', 'lib/core/di', 'src/api', 'src/network'],
+  },
   budget: { currency: 'USD', runCap: 30 },
+  // Limits for the driver's perf / mem / startup / leak-loop probes.
+  perf: { maxJankPct: 10, maxP90Ms: 32, maxMemGrowthMb: 25, maxColdStartMs: 4000, leakLoopTimes: 10 },
   credentialsFile: 'qc.credentials.js',
 };
 
@@ -264,6 +289,26 @@ function loadConfig() {
 
   cachedConfig = merged;
   cachedConfigPath = file;
+  return merged;
+}
+
+// loadConfig() for scripts that also work in a repo with no qc.config.json
+// (pr.js only needs the git remote): the defaults, rooted at the git top
+// level, instead of an exit.
+function loadConfigOptional() {
+  if (findConfigFile(process.cwd())) {return loadConfig();}
+  const merged = deepMerge(DEFAULTS, {});
+  let root = process.cwd();
+  try {
+    // eslint-disable-next-line global-require
+    root = require('child_process')
+      .execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+      .trim() || root;
+  } catch (_) {
+    // not a git repo: cwd it is
+  }
+  Object.defineProperty(merged, 'configPath', { value: null, enumerable: false });
+  Object.defineProperty(merged, 'repoRoot', { value: root, enumerable: false });
   return merged;
 }
 
@@ -590,6 +635,7 @@ function credentialsFor(env = activeEnv()) {
 
 module.exports = {
   loadConfig,
+  loadConfigOptional,
   findRepoRoot,
   reportsDir,
   capsFor,

@@ -76,6 +76,26 @@ device pass. See [reporting](../skill/references/reporting.md).
 
 ---
 
+### Jira over REST
+
+Instead of agent tools, `tracker.rest` lets the bundled `qc/tracker.js` talk to
+Jira directly with an API token, so every run pulls the ticket fresh and
+publish works with any agent:
+
+```json
+"tracker": {
+  "kind": "jira",
+  "site": "your-org.atlassian.net",
+  "projectKey": "ABC",
+  "rest": { "enabled": true, "baseUrlEnv": "JIRA_BASE_URL", "emailEnv": "JIRA_EMAIL", "tokenEnv": "JIRA_API_TOKEN", "acceptanceField": "" }
+}
+```
+
+The three values live in environment variables (export them in your shell
+profile), never in this file. `node qc/tracker.js check` tests the login, and
+`qc-check doctor` reports missing variables. Set `acceptanceField` to a custom
+field id when your project keeps acceptance criteria outside the description.
+
 ## agent
 
 ```json
@@ -113,7 +133,13 @@ low. The run is resumable, so a timeout costs progress, not evidence.
 ## repo
 
 ```json
-"repo": { "defaultBranch": "main", "prCommand": "" }
+"repo": {
+  "defaultBranch": "main",
+  "prCommand": "",
+  "host": "",
+  "remote": "origin",
+  "bitbucket": { "emailEnv": "BITBUCKET_EMAIL", "tokenEnv": "BITBUCKET_API_TOKEN" }
+}
 ```
 
 `defaultBranch` is what a feature branch is diffed against to find the code
@@ -123,6 +149,23 @@ your release branch when that is what you merge into.
 `prCommand` is the command that opens a pull request, such as
 `gh pr create --fill`. Leave it empty and the fix loop derives the URL from the
 git remote and prints it instead of opening one.
+
+`host` is where pull requests live, for `qc-check run pr <n>` and for posting
+the review comment on a PR (`qc/pr.js`). `github` reads and comments through
+the `gh` CLI; `bitbucket` uses the Bitbucket Cloud REST API
+(api.bitbucket.org/2.0); `none` turns PR support off. Leave it empty to detect
+it from the URL of `remote` (default `origin`). The owner or workspace and the
+repository name are always parsed from that remote URL, never configured.
+
+`bitbucket.emailEnv` and `bitbucket.tokenEnv` are the **names** of the
+environment variables holding the Atlassian account email and an API token
+with pull request scope (read to start a run, write to comment). The values
+are never printed or written anywhere.
+
+`qc/pr.js id <n>` prints the ticket id a PR run uses: a key found in the PR
+title, else in its source branch, matched by `tracker.ticketPattern`, else the
+pseudo-id `PR-<n>`. The pseudo-id must match `tracker.ticketPattern` too; the
+default `[A-Z]+-[0-9]+` accepts it, a narrower pattern needs `|PR-[0-9]+` added.
 
 ---
 
@@ -241,7 +284,31 @@ kills the session mid-pass, taking the screen recording with it.
 
 `app.build.android` and `app.build.ios` are the commands that build and install
 the configured flavor. Leave them empty and the agent asks you before building
-anything. `app.envBanner` is the text your non-production builds display; the
+anything. `qc/build.js run --platform android|ios` runs them inside a
+worktree of the branch under test (see below), skips the build when that commit
+was already built and installed, and verifies the install: on Android
+`dumpsys package` `lastUpdateTime` must change and adb must not report an
+`Exception`, a `Failure` or `Can't find service`; on an iOS simulator
+`xcrun simctl get_app_container` must succeed. A failed check is an `ERROR:`,
+never a silent pass on yesterday's build.
+
+`app.build.worktreeDir` is where `qc/build.js prepare --branch <b>` keeps one git
+worktree per branch. Empty means a per-repo folder in the OS temp dir, outside
+the checkout so the project's analyzer and file watchers never see it. Your own
+checkout is never switched, stashed or reset. `app.build.copyFiles` lists
+gitignored files or folders the build needs, such as `["env/{flavor}.json"]`,
+copied from your checkout into the worktree and never committed. `{flavor}` is
+expanded as in the build commands.
+
+```json
+"build": {
+  "android": "flutter build apk --flavor {flavor} && adb install -r build/app/outputs/flutter-apk/app-{flavor}-debug.apk",
+  "ios": "",
+  "worktreeDir": "",
+  "copyFiles": ["env/{flavor}.json"]
+}
+```
+ `app.envBanner` is the text your non-production builds display; the
 first device step asserts it, which catches the case where the emulator is
 running yesterday's production build.
 
@@ -307,7 +374,33 @@ you are testing.
 | `auth.*` | How to obtain a bearer token. `tokenPath` is a dot-path into the login response, so `data.accessToken` reads `response.data.accessToken`. |
 | `extraBody` | Constant fields your login endpoint requires beyond username and password. |
 | `auth.sessionHeaders` | Header name to response dot-path, for a gateway that issues a per-session fingerprint or CSRF value at login. |
+| `auth.bodyEncoding` | `json` (default) or `form`. Use `form` for an OAuth token endpoint, which expects `application/x-www-form-urlencoded`. Put `grant_type` and `scope` in `extraBody`. |
+| `auth.headers` | Headers sent on the login request only, such as the OAuth client's `Authorization: Basic ...`. |
 | `headers` | Constant headers every request needs, such as a client id or an API version. Values may contain `{lang}` and `{version}`. |
+
+Values in `headers` and `auth.headers` can name a secret instead of holding
+it, so `qc.config.json` stays safe to commit. `${env:NAME}` reads an
+environment variable. `${file:env/dev.json#OAUTH_BASIC}` reads a key from a
+JSON file relative to the repo root, such as a gitignored file the app build
+already uses. A reference that does not resolve stops the request with an
+error naming it, and resolved values are masked in all output and saved files.
+
+`guestAuth` (optional) is a second login that needs no account, used by
+`node qc/api.js --guest` for guest-user flows, for example an OAuth
+`client_credentials` grant. It takes the same keys as `auth` minus the
+credential fields.
+
+An OAuth password grant, for example:
+
+```json
+"auth": {
+  "path": "/oauth/token",
+  "bodyEncoding": "form",
+  "extraBody": { "grant_type": "password", "scope": "basic" },
+  "headers": { "Authorization": "${file:env/dev.json#OAUTH_BASIC}" },
+  "tokenPath": "access_token"
+}
+```
 | `smokePath` | A cheap authenticated GET. Proves a real authenticated round trip, not just that a port is open. |
 
 Set `enabled: false` for an app with no backend of its own. The contract and
@@ -412,6 +505,8 @@ These override configuration for a single run.
 | `QC_ENV` | Backend environment, overriding `backend.defaultEnv`. |
 | `QC_FLAVOR` | App flavor, overriding `app.defaultFlavor`. |
 | `QC_BUDGET` | Run cap, overriding `budget.runCap`. |
+| `BITBUCKET_EMAIL`, `BITBUCKET_API_TOKEN` | Bitbucket Cloud login for PR runs and PR comments (names set by `repo.bitbucket`). |
+| `ANDROID_SERIAL` | The device `qc/build.js` installs to and verifies, when several are connected. |
 | `QC_EVAL` | Headless mode. Auto-approves the test plan, never commits, never publishes. Set by an automated runner, not by hand. |
 
 ---

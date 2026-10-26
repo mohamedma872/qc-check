@@ -70,10 +70,15 @@ function parseAndroid(xml, showAll) {
   // UiAutomator2 emits either <node .../> or class-named tags like
   // <android.widget.FrameLayout .../> depending on driver version - accept both.
   const re = /<(?:node|[\w$]+(?:\.[\w$]+)+)((?:[^>"]|"[^"]*")*?)\/?>/g;
+  // Position among nodes of the same class, in document order: what
+  // `driver.js input --class <class> --index <n>` counts.
+  const perClass = {};
   let m;
   while ((m = re.exec(xml))) {
     const s = m[0];
     if (s.startsWith('<hierarchy')) {continue;}
+    const fullCls = attr(s, 'class') || 'node';
+    const classIndex = (perClass[fullCls] = (perClass[fullCls] || 0) + 1) - 1;
     const desc = attr(s, 'content-desc');
     const text = attr(s, 'text');
     const resId = attr(s, 'resource-id');
@@ -85,10 +90,12 @@ function parseAndroid(xml, showAll) {
     const center = b
       ? `${(+b[1] + +b[3]) / 2},${(+b[2] + +b[4]) / 2}`
       : '?';
-    const cls = (attr(s, 'class') || 'node').split('.').pop();
+    const cls = fullCls.split('.').pop();
+    // No id to select by: show the class index that still reaches it.
+    const byClass = !desc && !resId ? ` class-index=${classIndex}` : '';
     lines.push(
       `${cls} ~${desc || ''}${text ? ` text="${text}"` : ''}${resId ? ` id=${resId}` : ''}` +
-        ` enabled=${attr(s, 'enabled')} clickable=${clickable} center ${center}`
+        ` enabled=${attr(s, 'enabled')} clickable=${clickable} center ${center}${byClass}`
     );
   }
   return lines;

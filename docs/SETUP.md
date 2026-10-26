@@ -365,6 +365,40 @@ qc-check run                 # derive the ticket from the current branch
 qc-check run all             # sweep every screen in every locale
 qc-check run fix ABC-123     # fix what the last run found
 qc-check run ABC-123 --dry-run   # show what would be executed
+qc-check run pr 42           # QC pull request 42 and the branch it merges
+```
+
+### Starting from a pull request
+
+`qc-check run pr <n>` reads the pull request from the host named by
+`repo.host` (detected from the `origin` remote when empty), then:
+
+- uses the ticket key in the PR title or branch when there is one (matched by
+  `tracker.ticketPattern`), and otherwise the pseudo-id `PR-<n>` with the PR
+  description as the ticket;
+- tells the agent to build the PR's source branch with `qc/build.js`, in its
+  own git worktree, so your checkout is never switched or stashed;
+- posts the review comment on the PR with `qc/pr.js comment`.
+
+GitHub needs the `gh` CLI, logged in (`gh auth login`). Bitbucket Cloud needs
+an Atlassian API token with pull request scope, in two environment variables
+(names configurable under `repo.bitbucket`):
+
+```bash
+export BITBUCKET_EMAIL="you@example.com"
+export BITBUCKET_API_TOKEN="..."      # never commit it
+```
+
+Builds often need gitignored files, such as a `--dart-define-from-file` env
+file. List them in `app.build.copyFiles` and they are copied from your checkout
+into each worktree. Try it by hand:
+
+```bash
+node qc/pr.js get 42                          # the PR as a ticket
+node qc/pr.js id 42                           # the ticket id a run would use
+node qc/build.js prepare --branch feature/x   # worktree for that branch
+node qc/build.js run --platform android       # build, install, verify the install
+node qc/build.js clean                        # remove the worktrees
 ```
 
 While it runs, and after:
