@@ -20,7 +20,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node test/smoke.js && node test/intake.js && node test/review.js && node test/driver.js",
+    "test": "node test/smoke.js && node test/intake.js && node test/review.js && node test/driver.js && node test/scan.js",
     "check:leaks": "node test/no-private-refs.js"
   },
   "keywords": [

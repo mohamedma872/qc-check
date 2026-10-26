@@ -86,8 +86,10 @@ repository has that layout.
 **Every scan hit is a lead, not a finding.** The rules are patterns and they
 have false positives: a "controller never disposed" whose dispose lives in a
 mixin, a `context` after `await` that sits behind a `mounted` check two lines
-up. Open each lead, decide, and carry only the real ones into `risks`. Mark the
-step with the counts:
+up. Open each lead, decide, and carry only the real ones into `risks`. A rule
+that is mostly noise for this repository goes into `config.review.disable`.
+Secret values are always masked in the output; never unmask one into a report
+or a finding. Mark the step with the counts:
 
 ```bash
 node qc/state.js ABC-123 step code-review scan pass 23 leads, 7 kept
@@ -151,7 +153,7 @@ the finding (for example "M9 Insecure Data Storage"):
   `allowBackup`, new permissions the feature does not need.
 - **M2 Supply chain:** each new or bumped dependency. Check it is maintained
   and has no open advisory (`osv-scanner`, `npm audit`, the package page).
-- **M10 Cryptography:** MD5 or SHA-1 for anything security-related,
+- **M10 Cryptography:** MD5 or SHA1 for anything security-related,
   non-secure random for tokens or nonces.
 
 Where the device or API can prove it, plan a case: log in, log out, and check

@@ -483,6 +483,52 @@
         }
       }
     },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Static PR scan (qc/review-scan.js) for the code-review phase. It prints leads, not findings.",
+      "properties": {
+        "lintCommand": {
+          "type": "string",
+          "default": "",
+          "description": "Linter run by review-scan.js (always when set, or with --lint). {files} becomes the changed files, shell-quoted. Empty with --lint: flutter/dart analyze for a pubspec.yaml repo, npx eslint -f unix when package.json has eslint."
+        },
+        "layers": {
+          "type": "array",
+          "default": [],
+          "description": "Import rules. Empty: built-in data/domain/presentation rules when the repo has <src>/features/*/{data,domain,presentation}.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "files", "mustNotImport"],
+            "properties": {
+              "name": { "type": "string" },
+              "files": { "type": "string", "description": "Glob (**, *, ?, {a,b}) of the files the rule applies to, repo-relative." },
+              "mustNotImport": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Globs matched against the resolved repo-relative import path, or substrings of the import (e.g. package:dio/)."
+              },
+              "why": { "type": "string" }
+            }
+          }
+        },
+        "disable": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Rule ids to skip, e.g. debug-leftover; lint or layer-import skips every lint:* or layer-import:* rule."
+        },
+        "maxFileLines": { "type": "integer", "minimum": 1, "default": 600 },
+        "maxFunctionLines": { "type": "integer", "minimum": 1, "default": 80 },
+        "httpClientDirs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["lib/core/network", "lib/core/di", "src/api", "src/network"],
+          "description": "Directories allowed to construct an HTTP client (Dio, http.Client, axios.create); elsewhere it is a di-bypass lead."
+        }
+      }
+    },
     "budget": {
       "type": "object",
       "additionalProperties": false,

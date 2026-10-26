@@ -348,7 +348,7 @@ function layoutSection(host, cfg) {
   out.push(`Run every \`node ${RUNTIME_DIR}/...\` command from there.`);
   out.push('');
   out.push('Runtime scripts (each takes --help):');
-  for (const f of ['driver.js', 'dump-tree.js', 'api.js', 'config.js', 'state.js', 'cost.js', 'runs.js', 'pr.js', 'build.js']) {
+  for (const f of ['driver.js', 'dump-tree.js', 'api.js', 'config.js', 'state.js', 'cost.js', 'runs.js', 'pr.js', 'build.js', 'review-scan.js']) {
     out.push(`  ${path.join(host, RUNTIME_DIR, f)}`);
   }
   out.push(`  ${path.join(host, RUNTIME_DIR, 'record.sh')}`);

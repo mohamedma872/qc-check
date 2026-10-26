@@ -117,6 +117,16 @@ const DEFAULTS = {
     typecheckCommand: '',
     testsGitignored: false,
   },
+  // Static PR scan (review-scan.js). Empty layers means "use the built-in
+  // feature/data/domain/presentation rules when the repo has that layout".
+  review: {
+    lintCommand: '',
+    layers: [],
+    disable: [],
+    maxFileLines: 600,
+    maxFunctionLines: 80,
+    httpClientDirs: ['lib/core/network', 'lib/core/di', 'src/api', 'src/network'],
+  },
   budget: { currency: 'USD', runCap: 30 },
   credentialsFile: 'qc.credentials.js',
 };

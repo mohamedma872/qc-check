@@ -452,6 +452,7 @@ node qc/api.js --smoke                  # login, then the authenticated read at 
 node qc/api.js GET|POST <path> [--save name]    # authenticated REST; --save keeps it in <run>/api/, tokens and body secrets masked
 node qc/api.js ... --raw                # body unmasked, for piping; never into a report (warns)
 node qc/pr.js get|id|comment <n>        # read a pull request, derive its ticket id, post the review comment
+node qc/review-scan.js [--base b] --save # static leads on the diff (security, perf, memory, races, standards, layers); verify each
 node qc/build.js prepare|run|status|clean   # build a branch in its own worktree and verify the install
 node qc/runs.js current                 # this run: ticket, env, id and folder, as JSON
 node qc/config.js --json                # the resolved config, after defaults are merged
