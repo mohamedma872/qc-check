@@ -525,6 +525,12 @@
         },
         "caps": {
           "$ref": "#/definitions/capsOverride"
+        },
+        "emulatorArgs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Extra flags driver.js health --fix passes to the emulator on a cold boot, for example [\"-gpu\", \"swiftshader_indirect\"]."
         }
       }
     },

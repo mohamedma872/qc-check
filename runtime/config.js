@@ -64,8 +64,8 @@ const DEFAULTS = {
   devices: {
     // `caps` is a free-form Appium capability block merged last in capsFor(),
     // so an unusual device can be accommodated without a schema change.
-    android: { enabled: true, avd: '', udid: '', deviceName: 'Android Phone', caps: {} },
-    android_tablet: { enabled: false, avd: '', udid: '', deviceName: 'Android Tablet', caps: {} },
+    android: { enabled: true, avd: '', udid: '', deviceName: 'Android Phone', caps: {}, emulatorArgs: [] },
+    android_tablet: { enabled: false, avd: '', udid: '', deviceName: 'Android Tablet', caps: {}, emulatorArgs: [] },
     // realDevice drives a physical iPhone (Xcode 27 Device Hub lists both
     // kinds). Appium then has to sign WebDriverAgent, hence the team fields.
     ios: {
