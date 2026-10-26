@@ -416,6 +416,12 @@
           "type": "string",
           "description": "Cheap authenticated GET used to prove a real round trip."
         },
+        "redactKeys": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Extra body key names api.js masks in saved and printed responses (matched case-insensitively, ignoring punctuation)."
+        },
         "protectedEnvs": {
           "type": "array",
           "items": {

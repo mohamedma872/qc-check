@@ -40,6 +40,7 @@ Getting started
   qc-check doctor                confirm Appium, a device and an agent are ready
   qc-check env                   environments and which have credentials
   qc-check run ABC-123           QC one ticket
+  qc-check run pr 42             QC a pull request and its branch
   qc-check run all               sweep every screen
   qc-check run fix ABC-123       fix what the last run found
 

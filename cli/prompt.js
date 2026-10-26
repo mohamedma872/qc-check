@@ -72,7 +72,7 @@ function targetSection(target) {
       'read the `full-sweep.md` reference FIRST, use the pseudo-ticket',
       '`FULL-SWEEP` for all state and evidence file names, build the screen',
       'inventory instead of fetching a ticket, use the per-screen checklist as',
-      'the test plan, and skip the contract and unit-test phases.',
+      'the test plan, and skip the code-review, contract and unit-test phases.',
     ].join('\n');
   }
   if (target.mode === 'fix') {

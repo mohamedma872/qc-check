@@ -14,6 +14,7 @@ by `node qc/runs.js current` relative to `qc-reports/FULL-SWEEP/sprint/`
 | Phase | Sweep meaning |
 |-------|---------------|
 | `ticket` | Build the **screen inventory from the navigation code** (below). Derive it fresh every run: new screens must appear in the sweep |
+| `code-review` | `set code-review skipped sweep mode` (there is no single diff to review) |
 | `test-plan` | Auto-generate the per-screen checklist into `plan.md` in the run folder. **The user approval gate still applies** |
 | `contract` | `set contract skipped sweep mode` (there is no single feature contract) |
 | `smoke` | Health and auth, plus **one authenticated read per main screen's endpoint**, so a dead endpoint is known before the emulator boots |

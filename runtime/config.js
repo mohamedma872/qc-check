@@ -97,6 +97,8 @@ const DEFAULTS = {
     },
     headers: {},
     smokePath: '',
+    // Extra response-body key names api.js masks, on top of its built-in list.
+    redactKeys: [],
     // Environments a run may not target without an explicit override. Names
     // that look like production are protected even when not listed.
     protectedEnvs: [],
