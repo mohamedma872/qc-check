@@ -139,6 +139,9 @@ async function pureChecks() {
     const delivered = 'Starting: Intent { act=android.intent.action.VIEW }\nWarning: Activity not started, intent has been delivered to currently running top-most instance.\nStatus: ok';
     eq(device.amStartFailed(delivered), null, 'delivered to a singleTop activity is a success');
     eq(device.amStartOutcome(delivered), 'delivered to the running activity', 'outcome');
+    const front = 'Starting: Intent { act=android.intent.action.VIEW }\nWarning: Activity not started, its current task has been brought to the front';
+    eq(device.amStartFailed(front), null, 'task brought to the front is not a failure');
+    eq(device.amStartOutcome(front), 'task brought to the front', 'front outcome');
   });
 
   console.log('\nserial selection');

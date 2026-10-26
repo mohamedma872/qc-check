@@ -56,12 +56,17 @@ function amStartViewCommand(url, pkg, activity) {
 // `am start` exits 0 even when nothing started; the verdict is in its output.
 // "Activity not started, intent has been delivered to currently running
 // top-most instance" is a success: a singleTop app (Flutter's default) gets
-// the link through onNewIntent instead of a fresh activity.
+// the link through onNewIntent instead of a fresh activity. "Its current task
+// has been brought to the front" is not a failure either: the app's task came
+// forward (another app, such as a browser, was on top) and a singleTop or
+// singleTask app still receives the intent, but Android does not confirm it,
+// so the caller warns and the test must check the screen.
 function amStartFailed(output) {
   const text = String(output);
   const m = text.match(/^(Error[^\n]*|.*Activity not started[^\n]*|.*unable to resolve Intent[^\n]*)/im);
   if (!m) {return null;}
-  if (/delivered to currently running top-most instance/i.test(m[1]) && !/^Error/im.test(text)) {return null;}
+  if (/^Error/im.test(text)) {return m[1].trim();}
+  if (/delivered to currently running top-most instance|current task has been brought to the front/i.test(m[1])) {return null;}
   return m[1].trim();
 }
 
@@ -69,6 +74,7 @@ function amStartFailed(output) {
 function amStartOutcome(output) {
   const text = String(output);
   if (/delivered to currently running top-most instance/i.test(text)) {return 'delivered to the running activity';}
+  if (/current task has been brought to the front/i.test(text)) {return 'task brought to the front';}
   const m = /LaunchState: (\w+)/.exec(text);
   return m ? `launch: ${m[1].toLowerCase()}` : '';
 }

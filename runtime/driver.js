@@ -1028,6 +1028,10 @@ async function cmdOpenUrl(opts) {
     process.exit(1);
   }
   const how = device.amStartOutcome(out);
+  if (how === 'task brought to the front') {
+    console.warn(`WARN: ${ctx.pkg} was brought to the front on ${serial}, but Android did not confirm it received ${url}. Check the screen with wait-for or assert-request.`);
+    return;
+  }
   console.log(`OK: opened ${url} in ${ctx.pkg} on ${serial}${how ? ` (${how})` : ''}`);
 }
 
