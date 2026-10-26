@@ -30,12 +30,18 @@ function baseConfig() {
       blockedLabel: 'BE-Blocking',
     },
     agent: { kind: 'none', command: '', extraArgs: [], headless: false, timeoutMinutes: 180 },
-    repo: { defaultBranch: 'main', prCommand: '' },
+    repo: {
+      defaultBranch: 'main',
+      prCommand: '',
+      host: '',
+      remote: 'origin',
+      bitbucket: { emailEnv: 'BITBUCKET_EMAIL', tokenEnv: 'BITBUCKET_API_TOKEN' },
+    },
     app: {
       defaultFlavor: 'staging',
       androidActivity: '',
       envBanner: '',
-      build: { android: '', ios: '' },
+      build: { android: '', ios: '', worktreeDir: '', copyFiles: [] },
       flavors: {},
     },
     devices: {

@@ -27,6 +27,7 @@ const {
 const { resolveEnv, guardProtected, runKey, peekRun, hostRuntime, isProtected } = require('./envs');
 
 const { buildPrompt, resolveTarget } = require('./prompt');
+const { resolvePrTarget } = require('./pr-target');
 
 const KINDS = ['claude', 'codex', 'custom', 'none'];
 
@@ -75,7 +76,7 @@ function needsLogin(cfg) {
   return ['android', 'android_tablet', 'ios'].some((n) => devices[n] && devices[n].enabled === true);
 }
 
-function preflight(host, cfg, env) {
+function preflight(host, cfg, env, target) {
   const problems = [];
   heading('Preflight');
 
@@ -84,6 +85,13 @@ function preflight(host, cfg, env) {
   const runtime = path.join(host, RUNTIME_DIR);
   if (fs.existsSync(path.join(runtime, 'driver.js'))) ok('runtime', runtime);
   else bad(problems, `runtime missing at ${runtime}`, 'run `qc-check setup` to install it');
+
+  // A PR run tells the agent to use these two; an older install lacks them.
+  if (target && target.mode === 'pr') {
+    const missing = ['pr.js', 'build.js'].filter((f) => !fs.existsSync(path.join(runtime, f)));
+    if (missing.length === 0) ok('pr runtime', 'pr.js, build.js');
+    else bad(problems, `the runtime predates PR runs (no ${missing.join(', ')})`, 'run `qc-check setup` to update it');
+  }
 
   const profiles = ['android', 'android_tablet', 'ios'].filter(
     (n) => cfg.devices && cfg.devices[n] && cfg.devices[n].enabled === true,
@@ -311,7 +319,7 @@ async function run(args) {
     if (!derived) {
       fail(
         'no target, and no ticket id could be read from the branch name.\n' +
-          '  Pass one: `qc-check run ABC-123`, `qc-check run all`, or `qc-check run fix ABC-123`.',
+          '  Pass one: `qc-check run ABC-123`, `qc-check run pr 42`, `qc-check run all`, or `qc-check run fix ABC-123`.',
       );
       return;
     }
@@ -322,6 +330,9 @@ async function run(args) {
     fail('"fix" needs a run id, for example `qc-check run fix ABC-123`.');
     return;
   }
+  // The PR is read now (read-only), so the run folder is named after the ticket
+  // id it resolves to and the prompt can name the branch under test.
+  if (target.mode === 'pr') target = resolvePrTarget(host, target);
   if (target.mode === 'ticket' && !validTicket(cfg, target.id)) {
     fail(
       `"${target.id}" does not match tracker.ticketPattern ` +
@@ -350,6 +361,7 @@ async function run(args) {
     if (dryRun) {
       heading('Dry run (agent kind: none)');
       info(`  target      ${target.label}`);
+      if (target.mode === 'pr') info(`  branch      ${target.pr.sourceBranch} -> ${target.pr.targetBranch}`);
       info(`  environment ${env}${isProtected(cfg, env) ? ' (protected, allowed)' : ''}`);
       info(`  run folder  ${peek.dir ? `resumes ${peek.dir}` : `new, under ${peek.root}`}`);
       info(`  headless    ${headless ? 'yes' : 'no'}`);
@@ -371,6 +383,7 @@ async function run(args) {
   if (dryRun) {
     heading(`Dry run (agent kind: ${kind})`);
     info(`  target      ${target.label}`);
+    if (target.mode === 'pr') info(`  branch      ${target.pr.sourceBranch} -> ${target.pr.targetBranch}`);
     info(`  environment ${env}${isProtected(cfg, env) ? ' (protected, allowed)' : ''}`);
     info(`  run folder  ${peek.dir ? `resumes ${peek.dir}` : `new, under ${peek.root}`}`);
     info(`  headless    ${headless ? 'yes' : 'no'}`);
@@ -382,7 +395,7 @@ async function run(args) {
     return;
   }
 
-  const problems = preflight(host, cfg, env);
+  const problems = preflight(host, cfg, env, target);
   if (problems.length > 0) {
     info('');
     fail(`${problems.length} ${problems.length === 1 ? 'thing' : 'things'} to fix before a run can succeed. See FIX above.`);
@@ -431,7 +444,7 @@ async function run(args) {
 
   if (result.timedOut) {
     info('');
-    const arg = target.mode === 'fix' ? `fix ${target.id}` : target.mode === 'sweep' ? 'all' : target.id;
+    const arg = target.mode === 'fix' ? `fix ${target.id}` : target.mode === 'sweep' ? 'all' : target.mode === 'pr' ? `pr ${target.pr.number}` : target.id;
     info(`qc-check: timed out. Resume with \`qc-check run ${arg} --env ${env}\`: the run continues from disk.`);
     process.exitCode = result.code || 124;
     return;
@@ -448,6 +461,8 @@ Usage
 
 Targets
   ABC-123            QC one ticket
+  pr <n>             QC pull request <n> (GitHub or Bitbucket Cloud): the ticket key in its
+                     title or branch, else the PR itself as the ticket; its branch is tested
   all | full | sweep QC every screen, no ticket
   fix <RUN-ID>       fix what a previous run found
   (none)             derive the ticket id from the current branch name
@@ -471,6 +486,7 @@ directory, so \`qc-check run <same target>\` picks up where it stopped.
 
 Examples
   qc-check run ABC-123
+  qc-check run pr 42
   qc-check run all --headless
   qc-check run fix ABC-123 --agent codex
   qc-check run ABC-123 --dry-run`);

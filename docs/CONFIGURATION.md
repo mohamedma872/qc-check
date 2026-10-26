@@ -133,7 +133,13 @@ low. The run is resumable, so a timeout costs progress, not evidence.
 ## repo
 
 ```json
-"repo": { "defaultBranch": "main", "prCommand": "" }
+"repo": {
+  "defaultBranch": "main",
+  "prCommand": "",
+  "host": "",
+  "remote": "origin",
+  "bitbucket": { "emailEnv": "BITBUCKET_EMAIL", "tokenEnv": "BITBUCKET_API_TOKEN" }
+}
 ```
 
 `defaultBranch` is what a feature branch is diffed against to find the code
@@ -143,6 +149,23 @@ your release branch when that is what you merge into.
 `prCommand` is the command that opens a pull request, such as
 `gh pr create --fill`. Leave it empty and the fix loop derives the URL from the
 git remote and prints it instead of opening one.
+
+`host` is where pull requests live, for `qc-check run pr <n>` and for posting
+the review comment on a PR (`qc/pr.js`). `github` reads and comments through
+the `gh` CLI; `bitbucket` uses the Bitbucket Cloud REST API
+(api.bitbucket.org/2.0); `none` turns PR support off. Leave it empty to detect
+it from the URL of `remote` (default `origin`). The owner or workspace and the
+repository name are always parsed from that remote URL, never configured.
+
+`bitbucket.emailEnv` and `bitbucket.tokenEnv` are the **names** of the
+environment variables holding the Atlassian account email and an API token
+with pull request scope (read to start a run, write to comment). The values
+are never printed or written anywhere.
+
+`qc/pr.js id <n>` prints the ticket id a PR run uses: a key found in the PR
+title, else in its source branch, matched by `tracker.ticketPattern`, else the
+pseudo-id `PR-<n>`. The pseudo-id must match `tracker.ticketPattern` too; the
+default `[A-Z]+-[0-9]+` accepts it, a narrower pattern needs `|PR-[0-9]+` added.
 
 ---
 
@@ -261,7 +284,31 @@ kills the session mid-pass, taking the screen recording with it.
 
 `app.build.android` and `app.build.ios` are the commands that build and install
 the configured flavor. Leave them empty and the agent asks you before building
-anything. `app.envBanner` is the text your non-production builds display; the
+anything. `qc/build.js run --platform android|ios` runs them inside a
+worktree of the branch under test (see below), skips the build when that commit
+was already built and installed, and verifies the install: on Android
+`dumpsys package` `lastUpdateTime` must change and adb must not report an
+`Exception`, a `Failure` or `Can't find service`; on an iOS simulator
+`xcrun simctl get_app_container` must succeed. A failed check is an `ERROR:`,
+never a silent pass on yesterday's build.
+
+`app.build.worktreeDir` is where `qc/build.js prepare --branch <b>` keeps one git
+worktree per branch. Empty means a per-repo folder in the OS temp dir, outside
+the checkout so the project's analyzer and file watchers never see it. Your own
+checkout is never switched, stashed or reset. `app.build.copyFiles` lists
+gitignored files or folders the build needs, such as `["env/{flavor}.json"]`,
+copied from your checkout into the worktree and never committed. `{flavor}` is
+expanded as in the build commands.
+
+```json
+"build": {
+  "android": "flutter build apk --flavor {flavor} && adb install -r build/app/outputs/flutter-apk/app-{flavor}-debug.apk",
+  "ios": "",
+  "worktreeDir": "",
+  "copyFiles": ["env/{flavor}.json"]
+}
+```
+ `app.envBanner` is the text your non-production builds display; the
 first device step asserts it, which catches the case where the emulator is
 running yesterday's production build.
 
@@ -458,6 +505,8 @@ These override configuration for a single run.
 | `QC_ENV` | Backend environment, overriding `backend.defaultEnv`. |
 | `QC_FLAVOR` | App flavor, overriding `app.defaultFlavor`. |
 | `QC_BUDGET` | Run cap, overriding `budget.runCap`. |
+| `BITBUCKET_EMAIL`, `BITBUCKET_API_TOKEN` | Bitbucket Cloud login for PR runs and PR comments (names set by `repo.bitbucket`). |
+| `ANDROID_SERIAL` | The device `qc/build.js` installs to and verifies, when several are connected. |
 | `QC_EVAL` | Headless mode. Auto-approves the test plan, never commits, never publishes. Set by an automated runner, not by hand. |
 
 ---
