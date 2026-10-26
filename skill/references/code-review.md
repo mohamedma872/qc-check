@@ -292,7 +292,8 @@ A good `Probe:` case names the flow, the driver command that measures it and
 the threshold (defaults come from `config.perf`):
 
 - **Leak loop:** the screen the PR touched, opened and left N times.
-  `node qc/driver.js leak-loop --steps "open-url --url <deep link>;back" --times 10 --label pdp`.
+  `node qc/driver.js leak-loop --steps "open-url --url <deep link>; sleep --ms 4000; key --code BACK" --times 10 --label pdp`.
+  Give each visit time to load before leaving, or Back may leave the app instead.
   It fails when memory grows past `config.perf.maxMemGrowthMb` or the
   Activity or view counts grow. Use a deep link or adb-only steps where you
   can, so the loop does not depend on selectors.
@@ -316,7 +317,7 @@ Example:
 |---|-----------|-------------------|----------|:-----:|
 | TC7 | Repro: failed sort refresh, then load more | open the list; airplane mode on; pick sort "price low to high" (`~sort-price-asc`); see the error; airplane mode off; scroll to the bottom | the list is either the old query's page 1 + 2, or the new query from page 1; never the old list with the new query's page 2 appended | pending |
 | TC8 | Repro: double tap Place order | fill checkout; tap Place order twice fast | one order created, button disabled while it runs | pending |
-| TC9 | Probe: product page leak loop | `leak-loop --steps "open-url --url <pdp link>;back" --times 10` | memory growth under 25 MB, Activity count unchanged | pending |
+| TC9 | Probe: product page leak loop | `leak-loop --steps "open-url --url <pdp link>; sleep --ms 4000; key --code BACK" --times 10` | memory growth under 25 MB, Activity count unchanged | pending |
 | TC10 | Probe: search list jank | `perf --reset`; search "table"; scroll to the end; `perf --label search` | janky frames under 10% | pending |
 
 Write the cases into a short list now (the case text plus the finding it

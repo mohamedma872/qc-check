@@ -81,6 +81,7 @@ function baseConfig() {
       testsGitignored: false,
     },
     budget: { currency: 'USD', runCap: 30 },
+    perf: { maxJankPct: 10, maxP90Ms: 32, maxMemGrowthMb: 25, maxColdStartMs: 4000, leakLoopTimes: 10 },
     credentialsFile: 'qc.credentials.js',
   };
 }

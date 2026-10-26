@@ -544,6 +544,43 @@
         }
       }
     },
+    "perf": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Limits for the device driver's perf, mem, startup and leak-loop probes (Android). A flag on the command overrides each one.",
+      "properties": {
+        "maxJankPct": {
+          "type": "number",
+          "minimum": 0,
+          "default": 10,
+          "description": "perf fails when more than this percentage of frames is janky."
+        },
+        "maxP90Ms": {
+          "type": "number",
+          "minimum": 0,
+          "default": 32,
+          "description": "perf fails when the 90th percentile frame time is over this many milliseconds."
+        },
+        "maxMemGrowthMb": {
+          "type": "number",
+          "minimum": 0,
+          "default": 25,
+          "description": "mem --compare and leak-loop fail when TOTAL PSS grows by more than this many MB (an Activity, ViewRootImpl or AppContext count that grows fails too)."
+        },
+        "maxColdStartMs": {
+          "type": "number",
+          "minimum": 0,
+          "default": 4000,
+          "description": "startup fails when the median launch time is over this many milliseconds. Debug builds are only indicative."
+        },
+        "leakLoopTimes": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 10,
+          "description": "How many times leak-loop repeats its steps when --times is not given."
+        }
+      }
+    },
     "credentialsFile": {
       "type": "string",
       "default": "qc.credentials.js",

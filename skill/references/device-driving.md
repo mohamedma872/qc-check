@@ -457,6 +457,69 @@ case note and verify server-side with `qc/api.js` instead. On iOS,
 `assert-request` and `log-mark` print `WARN: ... not supported on iOS` and exit
 2: the check was not run, so mark that case blocked, never passed.
 
+**Performance and memory probes (Android only).** Run these when the plan
+asks for performance, a screen feels slow, or the change touches lists,
+images, navigation or lifecycle code. They read `adb dumpsys`; on iOS they
+print `WARN: ... Android-only` and exit 2 (profile with Instruments by hand and
+mark the case blocked). Exit codes: `0` + `OK:` within limits, `3` + `FAIL:`
+over a limit (record it as a finding, quoting the line), `2` + `WARN:` not
+enough data or not comparable (not a pass), `1` + `ERROR:` the probe could not
+run. Limits come from `config.perf` (`maxJankPct` 10, `maxP90Ms` 32,
+`maxMemGrowthMb` 25, `maxColdStartMs` 4000, `leakLoopTimes` 10); a flag
+overrides each. With `--label`, results are saved as JSON under `<run>/perf/`.
+
+```bash
+# Frames: reset, exercise the screen for a few seconds, read
+node qc/driver.js perf --reset
+node qc/driver.js swipe --direction up            # scroll / animate what is under test
+node qc/driver.js perf --label tc4-scroll         # gfxinfo: jank %, p50/p90/p95/p99, slow UI thread...
+node qc/driver.js perf --source surfaceflinger --label tc4-scroll-sf   # Flutter: see below
+
+# Memory snapshot (MB: Java / Native heap, Code, Graphics, TOTAL PSS / RSS, Activities, Views...)
+node qc/driver.js mem --gc --label before
+node qc/driver.js mem --compare before            # vs now; --to <label> compares two saved ones
+
+# Leak probe: warm-up, baseline, repeat the flow n times, measure, compare
+node qc/driver.js leak-loop --label pdp --times 10 \
+  --steps "open-url --url https://www.example.com/p/ABC-123; sleep --ms 4000; key --code BACK; sleep --ms 2000"
+
+# Launch time: force-stop + am start -W, median of n runs
+node qc/driver.js startup --cold --times 3
+```
+
+- **Flutter and gfxinfo.** gfxinfo counts frames drawn by Android views. A
+  Flutter app draws through its own raster thread into a SurfaceView, so
+  gfxinfo sees almost none of its frames and `perf` says `WARN: not enough
+  data`. Use `perf --source surfaceflinger`, which times the app's SurfaceView
+  buffer layer (frame time = gap between presents, jank = a frame over 1.5
+  refresh periods, idle gaps excluded: approximate), or `flutter run
+  --profile` with DevTools for a real frame breakdown.
+- **Debug builds** are JIT-compiled with asserts on: frame and launch times
+  are many times slower than release. The driver detects `DEBUGGABLE` and
+  turns an over-limit result into `WARN: ... indicative only`. File a
+  performance finding only from a profile or release build.
+- **Memory.** A Flutter app's Dart heap is not in Java Heap: it is counted in
+  Native Heap and Private Other. `--gc` sends `am send-trim-memory ... RUNNING_MODERATE`
+  and waits 2 s (never a signal); it steadies the number but is not a full
+  GC. Compare snapshots taken on the same screen, in the foreground, in one
+  app session (a pid change makes `mem --compare` a WARN, exit 2): `mem`
+  warns when the app is in the background, where Android trims it. TOTAL
+  PSS includes swapped pages on recent releases; a WARN flags a swap shift
+  between snapshots (device memory pressure), so check TOTAL RSS too.
+- **What a leak looks like.** `mem --compare` and `leak-loop` fail when TOTAL
+  PSS grows more than `maxMemGrowthMb` (or `--max-growth-pct`), or when
+  Activities, ViewRootImpl or AppContexts grew: a screen that is gone but
+  still referenced. One step of growth after the first pass is a cache (that
+  is why leak-loop runs one warm-up first, `--warmup n`); steady growth per
+  iteration is a leak. Re-run with a higher `--times` before filing it.
+- **leak-loop steps** are driver commands separated by `;`, each run as its
+  own `node qc/driver.js ...` process (quote values with spaces). They must end
+  on the screen they start from: leak-loop aborts if an iteration leaves the
+  app (a `back` / `key --code BACK` on the root screen, or a back pressed before
+  the pushed screen appeared: add `sleep --ms`), and fails if the app process
+  changes (a crash). `key --code BACK` needs only adb; `back`, `tap` and
+  `wait-for` need the Appium session.
+
 Screenshots land in `<run>/screenshots/`, numbered in capture order, and the
 driver prints each path. That path, relative to `<run>/`, is what the report's
 Evidence column cites. Name captures after the case (`tc2-...`) so the report is

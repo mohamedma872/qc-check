@@ -128,6 +128,8 @@ const DEFAULTS = {
     httpClientDirs: ['lib/core/network', 'lib/core/di', 'src/api', 'src/network'],
   },
   budget: { currency: 'USD', runCap: 30 },
+  // Limits for the driver's perf / mem / startup / leak-loop probes.
+  perf: { maxJankPct: 10, maxP90Ms: 32, maxMemGrowthMb: 25, maxColdStartMs: 4000, leakLoopTimes: 10 },
   credentialsFile: 'qc.credentials.js',
 };
 
