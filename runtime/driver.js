@@ -311,6 +311,17 @@ async function cmdConnect(opts) {
   }
 
   const flavor = typeof opts.flavor === 'string' ? opts.flavor : undefined;
+  const deviceCfg = cfg.devices[platform] || {};
+  if (platform === 'ios' && !deviceCfg.realDevice && process.platform === 'darwin') {
+    // One-time build of the simulator WDA capsFor() hands to Appium. On failure
+    // the session falls back to Appium's own xcodebuild launch.
+    // eslint-disable-next-line global-require
+    const res = require('./wda.js').prepare();
+    if (res.error) {
+      console.error(`WARN: no prebuilt WebDriverAgent (${res.error}); Appium will build it with xcodebuild.`);
+      if (res.log) {console.error(`   see ${res.log}`);}
+    }
+  }
   let capabilities;
   try {
     capabilities = capsFor(platform, flavor);

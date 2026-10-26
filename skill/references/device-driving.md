@@ -134,6 +134,17 @@ error names `config.devices.ios.teamId` as the fix; report it as a blocker owned
 by the user, do not edit the config yourself. A real device keeps its own
 state between runs, so log out at the end of the pass when a case logged in.
 
+**iOS simulator WebDriverAgent:** the first simulator `connect` may print
+`Building WebDriverAgent ...` and take about a minute: it is a one-time build
+(`qc/wda.js`) that later sessions reuse, so do not interrupt it. Sessions then
+start in about ten seconds. If `connect` still fails on iOS, read the failure
+before retrying: `WARN: no prebuilt WebDriverAgent` means the build failed (its
+log path is printed) and Appium fell back to xcodebuild, which hangs under
+Xcode 26; "WebDriverAgentRunner-Runner cannot be opened" on the simulator, or
+"Failed to start the preinstalled WebDriverAgent", means a stale cache, fixed
+by `node qc/wda.js --rebuild`. Do not raise WDA timeouts or add WDA caps to
+`qc.config.json` to work around it; report it as a blocker with the log.
+
 **Android notes:**
 
 - `testID` maps to `content-desc` / `resource-id`, so `~my-test-id` selectors

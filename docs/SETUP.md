@@ -62,6 +62,18 @@ which shows simulators and physical iPhones in one window. qc-check works with
 it unchanged for simulators (Appium's XCUITest driver boots them directly). To
 watch a pass, open Device Hub with `open -b com.apple.dt.Devices`.
 
+**Simulator WebDriverAgent (Xcode 26 and later).** Appium normally starts its
+WebDriverAgent helper with `xcodebuild test-without-building` on every session.
+Under Xcode 26 that step hangs, or exits with code 75, and `connect` times out
+waiting for WDA. qc-check sidesteps it: the first iOS simulator `connect` builds
+WDA once (`qc/wda.js`, about a minute), embeds the Swift Testing libraries
+Xcode 26 leaves out of the runner (without them iOS shows
+"WebDriverAgentRunner-Runner cannot be opened because of a problem"), and
+caches it in `~/.cache/qc-check/wda/`, keyed by Xcode build and driver version.
+Every session after that installs and launches the cached runner with `simctl`,
+in about ten seconds, and xcodebuild never runs. Rebuild by hand with
+`node qc/wda.js --rebuild`; `qc-check doctor` shows whether it is ready.
+
 **A real iPhone.** Pair it once: plug it in, unlock it, tap *Trust*, and turn
 on Developer Mode (Settings › Privacy & Security). It then appears in Device
 Hub and in `xcrun devicectl list devices` with `physical` in the Reality

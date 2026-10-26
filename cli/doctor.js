@@ -134,6 +134,13 @@ async function run(args) {
       } else {
         ok.push(`ios: simulator ${want || '(auto)'}`);
       }
+      // eslint-disable-next-line global-require
+      const wdaApp = require('../runtime/wda.js').readyAppPath();
+      ok.push(
+        wdaApp
+          ? `ios: prebuilt WebDriverAgent ready (sessions skip xcodebuild): ${wdaApp}`
+          : 'ios: prebuilt WebDriverAgent not built yet; the first iOS connect builds it (or run `node qc/wda.js`)',
+      );
     }
   }
 

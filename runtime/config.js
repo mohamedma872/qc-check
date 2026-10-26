@@ -364,6 +364,15 @@ function capsFor(profile, flavor) {
       if (device.teamId) {caps['appium:xcodeOrgId'] = device.teamId;}
       caps['appium:xcodeSigningId'] = device.signingId || 'Apple Development';
       if (device.wdaBundleId) {caps['appium:updatedWDABundleId'] = device.wdaBundleId;}
+    } else {
+      // A runner prepared by wda.js starts through simctl; Appium's default
+      // xcodebuild launch hangs under Xcode 26. Without one, Appium's default.
+      // eslint-disable-next-line global-require
+      const wdaApp = require('./wda.js').readyAppPath();
+      if (wdaApp) {
+        caps['appium:usePreinstalledWDA'] = true;
+        caps['appium:prebuiltWDAPath'] = wdaApp;
+      }
     }
     return withOverrides(caps, device.caps);
   }

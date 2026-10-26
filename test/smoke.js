@@ -309,6 +309,81 @@ try {
     fs.writeFileSync(p, JSON.stringify(cfg, null, 2));
   });
 
+  check('the simulator WDA patch embeds only missing testing libraries', () => {
+    const { embedTestingFrameworks } = require(path.join(ROOT, 'runtime', 'wda.js'));
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'qc-wda-'));
+    const plat = path.join(tmp, 'dev', 'Platforms', 'iPhoneSimulator.platform', 'Developer');
+    const mk = (rel) => fs.mkdirSync(path.join(plat, rel), { recursive: true });
+    const touch = (rel) => { mk(path.dirname(rel)); fs.writeFileSync(path.join(plat, rel), 'x'); };
+    mk('Library/Frameworks/Testing.framework');
+    mk('Library/Frameworks/_Testing_Foundation.framework');
+    mk('Library/PrivateFrameworks/XCTestCore.framework');
+    mk('Library/PrivateFrameworks/DVTFoundation.framework');
+    touch('usr/lib/lib_TestingInterop.dylib');
+    touch('usr/lib/XCTest.swiftmodule');
+    const app = path.join(tmp, 'WebDriverAgentRunner-Runner.app');
+    fs.mkdirSync(path.join(app, 'Frameworks', 'Testing.framework'), { recursive: true });
+
+    const added = embedTestingFrameworks(app, path.join(tmp, 'dev')).sort();
+    assert(
+      JSON.stringify(added) ===
+        JSON.stringify(['XCTestCore.framework', '_Testing_Foundation.framework', 'lib_TestingInterop.dylib']),
+      `unexpected embed set: ${added.join(', ')}`,
+    );
+    assert(embedTestingFrameworks(app, path.join(tmp, 'dev')).length === 0, 'a second pass should add nothing');
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  check('a prepared simulator WDA skips xcodebuild, a real iPhone and an opt-out do not', () => {
+    if (process.platform !== 'darwin') return; // wda.js only builds on macOS
+    // A fake Xcode, XCUITest driver and cache, so no build or device is needed.
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'qc-wda-'));
+    const devDir = path.join(tmp, 'Xcode.app', 'Contents', 'Developer');
+    fs.mkdirSync(devDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(devDir, '..', 'version.plist'),
+      '<plist><dict><key>ProductBuildVersion</key>\n<string>17Z99</string></dict></plist>',
+    );
+    const wdaSrc = path.join(tmp, 'appium', 'node_modules', 'appium-xcuitest-driver', 'node_modules', 'appium-webdriveragent');
+    fs.mkdirSync(path.join(wdaSrc, 'WebDriverAgent.xcodeproj'), { recursive: true });
+    fs.writeFileSync(path.join(wdaSrc, 'package.json'), '{"version":"9.9.9"}');
+    const cache = path.join(tmp, 'cache');
+    const env = { ...process.env, DEVELOPER_DIR: devDir, APPIUM_HOME: path.join(tmp, 'appium'), QC_WDA_CACHE: cache };
+
+    const configJs = path.join(host, 'qc', 'config.js');
+    const p = path.join(host, 'qc.config.json');
+    const cfg = JSON.parse(fs.readFileSync(p, 'utf8'));
+    for (const f of Object.values(cfg.app.flavors)) f.iosBundleId = 'com.example.app';
+    const caps = () => JSON.parse(run([configJs, '--caps', 'ios'], { cwd: host, env }));
+    const save = () => fs.writeFileSync(p, JSON.stringify(cfg, null, 2));
+
+    cfg.devices.ios = { enabled: true, deviceName: 'iPhone 17', udid: '' };
+    save();
+    assert(!('appium:usePreinstalledWDA' in caps()), 'without a ready runner Appium keeps its default launch');
+
+    const built = path.join(cache, '9.9.9-xcode17Z99');
+    const app = path.join(built, 'Build', 'Products', 'Debug-iphonesimulator', 'WebDriverAgentRunner-Runner.app');
+    fs.mkdirSync(app, { recursive: true });
+    assert(!('appium:usePreinstalledWDA' in caps()), 'a half-built runner (no ready marker) must not be used');
+    fs.writeFileSync(path.join(built, '.qc-ready'), 'now');
+    const sim = caps();
+    assert(sim['appium:usePreinstalledWDA'] === true, 'a ready runner should switch to usePreinstalledWDA');
+    assert(sim['appium:prebuiltWDAPath'] === app, `wrong prebuiltWDAPath: ${sim['appium:prebuiltWDAPath']}`);
+
+    cfg.devices.ios = { enabled: true, deviceName: 'iPhone 17', udid: '', caps: { 'appium:usePreinstalledWDA': null, 'appium:prebuiltWDAPath': null } };
+    save();
+    const optOut = caps();
+    assert(!('appium:usePreinstalledWDA' in optOut) && !('appium:prebuiltWDAPath' in optOut), 'null caps should opt out');
+
+    cfg.devices.ios = { enabled: true, realDevice: true, deviceName: 'QA iPhone', udid: '00000000-0000000000000000', teamId: 'TEAM123456' };
+    save();
+    assert(!('appium:usePreinstalledWDA' in caps()), 'a real iPhone needs its own signed WDA, not the simulator build');
+
+    cfg.devices.ios = { enabled: false, deviceName: '', udid: '' };
+    save();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
   check('each repo gets its own session file and helper ports', () => {
     const configJs = path.join(host, 'qc', 'config.js');
     const mine = run([configJs, '--session-file'], { cwd: host }).trim();

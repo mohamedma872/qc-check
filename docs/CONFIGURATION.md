@@ -217,6 +217,14 @@ device needs `udid` (from `xcrun devicectl list devices` or Device Hub) and
 WebDriverAgent's bundle id when the default is taken on your team. See
 [SETUP.md](SETUP.md#ios) for pairing the device.
 
+On a simulator, once `qc/wda.js` has built WebDriverAgent (the first iOS
+`connect` does it), the caps gain `appium:usePreinstalledWDA` and
+`appium:prebuiltWDAPath`, so Appium launches WDA with `simctl` instead of the
+xcodebuild step that hangs under Xcode 26. To keep Appium's default launch, set
+both to `null` in `devices.ios.caps`. Remove any older hand-written WDA
+workarounds there (`usePrebuiltWDA`, `derivedDataPath`, long
+`wdaLaunchTimeout`s): they are no longer needed.
+
 **Several projects on one machine.** Each repo keeps its own Appium session
 record (`node qc/config.js --session-file` prints the path) and gets its own
 helper-server ports (`appium:systemPort` on Android, `appium:wdaLocalPort` on
