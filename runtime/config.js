@@ -42,6 +42,11 @@ const DEFAULTS = {
   repo: {
     defaultBranch: 'main',
     prCommand: '',
+    // github | bitbucket | none; empty detects it from the remote below.
+    host: '',
+    remote: 'origin',
+    // Bitbucket Cloud basic auth: the NAMES of the env vars, never the values.
+    bitbucket: { emailEnv: 'BITBUCKET_EMAIL', tokenEnv: 'BITBUCKET_API_TOKEN' },
   },
   app: {
     defaultFlavor: 'staging',
@@ -49,7 +54,9 @@ const DEFAULTS = {
     // On-screen marker that tells the tester which environment the running
     // build points at; empty when the app shows none.
     envBanner: '',
-    build: { android: '', ios: '' },
+    // worktreeDir: where build.js keeps per-branch worktrees (empty: the OS
+    // temp dir). copyFiles: gitignored files copied in from the main checkout.
+    build: { android: '', ios: '', worktreeDir: '', copyFiles: [] },
     // Left empty on purpose: a phantom default flavor would silently drive the
     // wrong build. An unknown flavor must fail loudly instead.
     flavors: {},
@@ -268,6 +275,26 @@ function loadConfig() {
 
   cachedConfig = merged;
   cachedConfigPath = file;
+  return merged;
+}
+
+// loadConfig() for scripts that also work in a repo with no qc.config.json
+// (pr.js only needs the git remote): the defaults, rooted at the git top
+// level, instead of an exit.
+function loadConfigOptional() {
+  if (findConfigFile(process.cwd())) {return loadConfig();}
+  const merged = deepMerge(DEFAULTS, {});
+  let root = process.cwd();
+  try {
+    // eslint-disable-next-line global-require
+    root = require('child_process')
+      .execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+      .trim() || root;
+  } catch (_) {
+    // not a git repo: cwd it is
+  }
+  Object.defineProperty(merged, 'configPath', { value: null, enumerable: false });
+  Object.defineProperty(merged, 'repoRoot', { value: root, enumerable: false });
   return merged;
 }
 
@@ -594,6 +621,7 @@ function credentialsFor(env = activeEnv()) {
 
 module.exports = {
   loadConfig,
+  loadConfigOptional,
   findRepoRoot,
   reportsDir,
   capsFor,
