@@ -114,7 +114,8 @@ Three settings change the shape of a run:
 
 Evidence is organized under `project.reportsDir` (default `qc-reports`) by
 ticket and environment. Each run produces a folder with a `summary.json`
-(machine-readable result), `report.md` (human-readable), screenshots, and
+(machine-readable result), `report.md` (the full evidence record), `review.md` (a short
+plain-language comment for the ticket and pull request), screenshots, and
 optionally recordings and API traces. Full-app sweeps use `FULL-SWEEP` as the
 ticket. Fix loops use `<TICKET>-FIX`. The `index.md` and `index.json` files
 track every run, newest first. Set `project.commitReports: true` to keep

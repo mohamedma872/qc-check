@@ -429,11 +429,11 @@ qc-reports/
     current                           id of the run a re-run resumes
     2026-09-22T17-03-26Z/             ISO 8601 timestamp per run
       summary.json                    machine-readable result
-      report.md  plan.md  state.json  cost.json  cost.md
+      report.md  review.md  plan.md  state.json  cost.json  cost.md
       screenshots/  recordings/  trees/  api/
   FULL-SWEEP/                         pseudo-ticket for sweeps
     2026-09-22T17-04-00Z/
-      summary.json  report.md  plan.md  state.json
+      summary.json  report.md  review.md  plan.md  state.json
       screenshots/  recordings/  trees/  api/
   FULL-SWEEP-FIX/                     fix loop over a sweep
     2026-09-22T17-05-00Z/

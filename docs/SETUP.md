@@ -222,7 +222,7 @@ qc-reports/
     current                         id of the run a re-run resumes
     2026-09-22T17-03-26Z/           one run
       summary.json                  machine-readable outcome
-      report.md  plan.md  state.json  cost.json  cost.md
+      report.md  review.md  plan.md  state.json  cost.json  cost.md
       screenshots/                  numbered like 001-login.png
       recordings/  trees/  api/
   FULL-SWEEP/

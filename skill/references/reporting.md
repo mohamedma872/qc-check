@@ -23,8 +23,9 @@ report even if earlier phases ran in a session you never saw. The sources are:
   `recordings/`, `trees/` and `api/`, each file numbered in capture order.
 
 The `## Findings` section below is the recorded findings log, not a
-recollection. Save the assembled report to `<run>/report.md`, which is also
-what gets pasted into the pull request. Cite evidence by its path relative to
+recollection. Save the assembled report to `<run>/report.md`. It is the
+evidence record, attached to the ticket; what gets posted as the comment is the
+shorter `review.md` (see below). Cite evidence by its path relative to
 `<run>/`, exactly as the script printed it. Do not rename or copy files to make
 the paths look nicer. The scripts pick up the `## Overall:` line from
 `report.md` into `summary.json`, so keep that heading exactly as below.
@@ -90,6 +91,79 @@ and whose scope it is; never report a pass you did not observe. Never put the
 QC account's username, account identifier, password or a full access token in
 a report. Mask account identifiers to the last few characters.
 
+## The review comment (what people actually read)
+
+`report.md` is the evidence record: complete, traceable, full of paths and
+case ids. Almost nobody reads it end to end. The comment you post on the ticket
+and the pull request is a separate, short document, written for the developer
+who has to act on it and the reviewer deciding whether to merge. Write it to
+`<run>/review.md` in the same `assemble` sub-step, **after** `report.md`, and
+build it only from what `report.md` and the findings log already say. It adds
+no new claims.
+
+**Who it is for:** a developer who did not watch the run, reading on a phone
+between meetings. They need to know three things in under a minute: does it
+work, what must change before merge, and how to see the problem themselves.
+
+**Style rules:**
+
+- **Open with the verdict in one plain sentence,** saying what was tested and
+  what works. For example: "Tested on an Android emulator with the staging
+  build. The feature works: links open the right product, both when the app is
+  open and when it starts from the link." No `PASS`/`FAIL`/`BLOCKED` jargon in
+  the first line.
+- **One numbered item per problem, most important first.** Give each one a
+  short bold title that says what the *user* sees ("The app freezes when there
+  is no internet"), not what the code does. Put the priority in brackets after
+  the title, using one of these words: `(must fix)`, `(please fix)`,
+  `(minor)`, `(heads-up)`.
+- **Under each title, at most three short parts:**
+  - what happens, from the user's side, including how to reproduce it if
+    that is not obvious;
+  - *Why:* one line naming the cause, with at most one file or function name
+    so the developer can find it;
+  - *Suggestion:* one line with the fix.
+- **Split the list when there is a merge gate:** a "Must fix before merge"
+  group first, then "Worth fixing", then a "Waiting on backend" or "Heads-up"
+  group for things outside the PR's control.
+- **Plain words over internal terms.** Say "spinner", "product page", "the
+  list mixes up results", not `DialogRoute`, `PdpBloc`, `hasReachedMax`. One
+  code identifier per item at most, in backticks, only where it helps someone
+  find the code. No test-case ids (`TC7`), DoD ids, run ids, sub-step names,
+  evidence paths or cost lines; those stay in `report.md`.
+- **Short.** Aim for under about 30 lines. If a finding needs more, it belongs
+  in `report.md`, and the comment points there.
+- **Name only what you observed or verified.** Mark code-review findings you
+  did not reproduce on a device as such ("may", "from the code"), and say what
+  you could not test and why, in one line.
+- **Never include** credentials, tokens, API keys, account identifiers, or
+  values copied from `api/` captures. Describe a key by its name and, at most,
+  a short prefix.
+
+Template:
+
+```markdown
+### QC review
+
+Tested on <device> with the <env> build. **<One sentence: what works.>**
+
+<There are N problems to fix before merging: | A few things to improve:>
+
+**1. <What the user sees>** (must fix)
+<What happens, and how to reproduce it in one line.>
+*Why:* <cause, with at most one `file` or `function`>.
+*Suggestion:* <the fix>.
+
+**2. <...>** (minor)
+<...>
+
+**Waiting on backend:**
+<What is missing on <env>, and what needs a re-test once it lands.>
+```
+
+When the run passed with nothing to fix, the comment is two lines: the verdict
+sentence and "No issues found." Do not pad it.
+
 ## Publish to the ticket (regardless of verdict)
 
 A FAIL or BLOCKED run is *more* useful with its evidence.
@@ -106,20 +180,22 @@ calls tools (an MCP tool name, a CLI, or an HTTP call, depending on the host):
 
 | Step | Tool | Notes |
 |------|------|-------|
-| comment | `config.tracker.tools.addComment` | the full report as the body |
+| comment | `config.tracker.tools.addComment` | `review.md` as the body, `report.md` attached |
 | attachments | `config.tracker.tools.uploadAttachment` | one call per file |
 | labels | `config.tracker.tools.addLabels` | verdict-gated, see below |
 
-1. **Report comment.** Call `config.tracker.tools.addComment` with the issue key
-   (`ABC-123`) and the full report as the body. Lead with
-   `QC Agent Report - ABC-123` and end with `Posted automatically by the QC
-   agent - Android phone, <env> environment.`
+1. **Review comment.** Call `config.tracker.tools.addComment` with the issue
+   key (`ABC-123`) and `<run>/review.md` as the body, not the full report.
+   Attach `report.md` in the next step, so anyone who wants the case-by-case
+   evidence has it one click away.
 
 2. **Attach the evidence.** Call `config.tracker.tools.uploadAttachment` once per
-   file: the per-case screenshots (the report's Evidence column, from
-   `<run>/screenshots/`) and the session recordings in `<run>/recordings/`.
-   Attach `api/` files only when a finding needs them; they are redacted, but
-   still check. Note in the sub-step
+   file: `<run>/report.md`, the per-case screenshots (the report's Evidence
+   column, from `<run>/screenshots/`) and the session recordings in
+   `<run>/recordings/`. Attach `api/` files only when a finding needs them.
+   Tokens and credentials are redacted, but a response body can still carry
+   secrets (a config endpoint that returns API keys, for example), so open each
+   one first and never attach a file that holds a key. Note in the sub-step
    which files landed. If uploads are unavailable, say so and keep the paths in
    the comment.
 
@@ -137,14 +213,14 @@ calls tools (an MCP tool name, a CLI, or an HTTP call, depending on the host):
 
 4. **Pull request.** If `config.repo.prCommand` is set, the same CLI can usually
    comment on a pull request too (for example `gh pr comment`): offer to post
-   the report there. If it is empty, the report is saved at
-   `<run>/report.md`: tell the user it is ready to paste, and
-   offer to open the PR URL if they share it.
+   `review.md` there. If it is empty, tell the user `<run>/review.md` is ready
+   to paste, and offer to open the PR URL if they share it. Posting on a pull
+   request is an external write: ask first, as for the ticket.
 
 5. **Confirm** in your reply what landed where: the ticket comment and
    attachments (with the link, built from `config.tracker.site` and
    `config.tracker.projectKey` when they are set), the labels applied and
-   removed, and the `report.md` path in the run folder.
+   removed, and the `report.md` and `review.md` paths in the run folder.
 
 ## Optional: codify the verified flow for a future e2e suite
 
