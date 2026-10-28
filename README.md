@@ -178,6 +178,20 @@ node test/intake.js   # PR intake, worktree builds, install verification, no net
 npm run check:leaks   # placeholder-only guard
 ```
 
+
+## Quality-gate validation pilot
+
+Before using AI-generated QC verdicts as mandatory release gates, follow the [quality-gate validation pilot](docs/QUALITY_GATES_PILOT.md). The pilot is a **test plan**, not a claim that automated enforcement or device validation is already implemented.
+
+It defines four independent acceptance gates:
+
+1. **False-pass detection:** seed known critical UI, backend and locale defects; require zero critical false PASS verdicts.
+2. **Evidence integrity:** require reproducible device, environment, build SHA, timestamps, steps and screenshots or API traces for every PASS.
+3. **Credential isolation:** use synthetic secrets to check prompts, logs, reports, screenshots and committed artifacts for leaks.
+4. **PR enforcement:** verify failing, blocked, skipped, interrupted and inconclusive runs cannot satisfy required checks.
+
+Run the pilot on isolated nonproduction Android and iOS test environments, repeat scenarios to measure flakiness, and track false-pass rate, critical defect detection, evidence completeness, runtime and cost. A human reviewer must approve results before enabling required CI checks. Configure branch protection and required checks in the hosting platform separately; this documentation does not itself enable them.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
