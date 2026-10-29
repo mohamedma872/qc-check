@@ -192,6 +192,13 @@ It defines four independent acceptance gates:
 
 Run the pilot on isolated nonproduction Android and iOS test environments, repeat scenarios to measure flakiness, and track false-pass rate, critical defect detection, evidence completeness, runtime and cost. A human reviewer must approve results before enabling required CI checks. Configure branch protection and required checks in the hosting platform separately; this documentation does not itself enable them.
 
+
+### Deterministic evidence gate and CI checks
+
+The initial implementation adds `node runtime/quality-gate.js <run-directory>` to fail closed on non-PASS verdicts, missing/unfinished phases, red findings and missing report/screenshot/manifest evidence. It requires an independently reviewed evidence manifest; see [implementation details](docs/QUALITY_GATE_IMPLEMENTATION.md) for the required fields and limitations.
+
+GitHub Actions now runs the existing CLI test suite, deterministic gate regression tests and private-reference checks for pull requests. **It does not execute Appium/device tests, prove screenshot authenticity, or configure required branch protection.** Do not treat the structural gate as a production release approval until the seeded-defect pilot and trusted evidence attestation are completed.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
