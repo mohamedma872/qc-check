@@ -378,7 +378,8 @@ qc-check run pr 42           # QC pull request 42 and the branch it merges
   description as the ticket;
 - tells the agent to build the PR's source branch with `qc/build.js`, in its
   own git worktree, so your checkout is never switched or stashed;
-- posts the review comment on the PR with `qc/pr.js comment`.
+- posts the review comment on the PR with `qc/pr.js comment`, and on a PASS,
+  once you agree, approves it with `qc/pr.js approve` (never in eval mode).
 
 GitHub needs the `gh` CLI, logged in (`gh auth login`). Bitbucket Cloud needs
 an Atlassian API token with pull request scope, in two environment variables

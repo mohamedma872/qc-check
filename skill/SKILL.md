@@ -242,7 +242,7 @@ stopped. Five mechanisms, all mandatory:
 | 8 | `ios` | iOS pass on a simulator or iPhone (`config.devices.ios`). **Only if explicitly requested** | same as `phone` | `references/device-driving.md` |
 | 9 | `unit-tests` | Extend the unit suites for the ticket's new logic, plus a failing repro test for each logic FAIL | `identify-units, extend-suites, run-green, commit` (+ `repro-tests` when a case failed) | `references/unit-tests.md` |
 | 10 | `report` | Assemble the QC report, then the plain-language review comment | `assemble` | `references/reporting.md` |
-| 11 | `publish` | Post the review comment and attach the report and evidence to the tracker and the pull request, labels gated by verdict | `comment, attachments, labels, confirm` | `references/reporting.md` |
+| 11 | `publish` | Post the review comment and attach the report and evidence to the tracker and the pull request, labels gated by verdict, approve the pull request on a PASS | `comment, attachments, labels, approve, confirm` | `references/reporting.md` |
 
 Read each reference **when you reach that phase**, not all up front. If
 `node qc/state.js ABC-123 get` shows different sub-step names for a phase, the
@@ -423,15 +423,36 @@ Publish happens **regardless of verdict**. A FAIL or BLOCKED run with evidence
 is more useful than silence. Be honest: report BLOCKED with whose scope it is,
 and never report a pass you did not observe.
 
+**Ticket writes are opt-in.** Nothing is written to the tracker (comment,
+attachments, labels) unless `config.tracker.publish` is `true`; it defaults to
+`false`, and `tracker.js comment|attach|labels` then print `SKIPPED` and send
+nothing. With it off, publish goes to the pull request only: mark the ticket
+sub-steps `skipped tracker.publish is false`. Reading the ticket is unaffected.
+
 Publish degrades with the tracker:
 
 | `config.tracker.kind` and tools | Publish does |
 |---|---|
 | `jira` with `config.tracker.rest.enabled` | The same steps through `node qc/tracker.js`: `comment ABC-123 --file <run>/review.md`, `attach ABC-123 <run>/report.md <files>`, `labels ABC-123 --add <label> [--remove <label>]`, then confirm the write back to the user |
 | A tracker, and `config.tracker.tools.addComment` non-empty | Post `review.md` as a comment, attach `report.md` and the evidence with `config.tracker.tools.uploadAttachment`, apply `config.tracker.passLabel` or `config.tracker.blockedLabel` with `config.tracker.tools.addLabels` per the verdict, then confirm the write back to the user |
-| Pull request (run started from a PR, or a PR exists for the branch) | `node qc/pr.js comment <n> --file <run>/review.md`: GitHub via `gh`, Bitbucket Cloud via REST. Run it with `--dry-run` first. `--update <commentId>` edits an earlier QC comment instead of adding another. Skipped in eval mode |
+| Pull request (run started from a PR, or a PR exists for the branch) | `node qc/pr.js comment <n> --file <run>/review.md`: GitHub via `gh`, Bitbucket Cloud via REST. Run it with `--dry-run` first. `--update <commentId>` edits an earlier QC comment instead of adding another. Then the `approve` sub-step, see below. Skipped in eval mode |
 | A tracker, but a tool name is empty | Do what is available. For the rest, print the exact text and file paths for the user to paste, and mark those sub-steps `skipped no <tool> configured` |
 | `none` | Nothing external to write. `set publish skipped no tracker configured`, then tell the user where the report and evidence are: `<run>/report.md`, `<run>/review.md` and the evidence folders beside it |
+
+The `approve` sub-step approves the pull request with
+`node qc/pr.js approve <n>`, and only when every one of these holds:
+
+- the report's `## Overall:` verdict is PASS. Never on FAIL or BLOCKED; there,
+  `step publish approve skipped verdict <FAIL|BLOCKED>`;
+- the user approved publishing, or approving, for this run. Approving is an
+  external write that tells reviewers the change is good: ask first otherwise;
+- `node qc/pr.js approve <n> --dry-run` ran first and showed the right PR,
+  OPEN (it refuses a merged or declined one);
+- not eval mode (`QC_EVAL=1`), where the script skips it anyway.
+
+With no pull request, `step publish approve skipped no pull request`. To take
+an approval back (Bitbucket only), `node qc/pr.js unapprove <n>`, also
+`--dry-run` first.
 
 Posting to a tracker is a write to an external system. Ask before the first
 write unless the user already approved publishing for this run. The same holds
@@ -452,6 +473,7 @@ node qc/api.js --smoke                  # login, then the authenticated read at 
 node qc/api.js GET|POST <path> [--save name]    # authenticated REST; --save keeps it in <run>/api/, tokens and body secrets masked
 node qc/api.js ... --raw                # body unmasked, for piping; never into a report (warns)
 node qc/pr.js get|id|comment <n>        # read a pull request, derive its ticket id, post the review comment
+node qc/pr.js approve|unapprove <n> --dry-run   # approve the PR on a PASS only; dry run first, user approval needed
 node qc/review-scan.js [--base b] --save # static leads on the diff (security, perf, memory, races, standards, layers); verify each
 node qc/driver.js perf|mem|leak-loop|startup   # jank, memory, leak loop, start time on Android (exit 3 = over the config.perf limit)
 node qc/build.js prepare|run|status|clean   # build a branch in its own worktree and verify the install
@@ -483,7 +505,8 @@ nothing else:
   not ask the user anything. Nobody is there to answer and the run would stall.
 - **`unit-tests`**: run the existing suites with `config.codeMap.testCommand`,
   but never commit. Mark the `commit` sub-step `skipped eval mode`.
-- **`publish`**: skip the whole phase, `set publish skipped eval mode`. The
+- **`publish`**: skip the whole phase, `set publish skipped eval mode`. That
+  includes `approve`: never approve a pull request in eval mode. The
   `report` phase still assembles `<run>/report.md` with its
   `## Overall:` line. That file is what the grader reads.
 - **Budget**: `QC_BUDGET` is the run's cap. Past it, device commands stop,

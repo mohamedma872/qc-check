@@ -290,6 +290,15 @@ check('pr.js: missing Bitbucket credentials name the variables, host none explai
   assert(o.status === 1 && /no supported PR host/.test(o.out), o.out);
 });
 
+check('pr.js approve: skipped in eval mode, GitHub has no unapprove, no network either way', () => {
+  const dir = repoWithRemote('bb4', 'git@bitbucket.org:your-workspace/your-app.git');
+  const e = node(['-r', NO_NET, PR, 'approve', '42', '--dry-run'], { cwd: dir, env: { ...scrubbedEnv, QC_EVAL: '1' } });
+  assert(e.status === 0 && /skipped: eval mode/.test(e.out) && !/NETWORK CALLED/.test(e.out), e.out);
+  const gdir = repoWithRemote('gh2', 'https://github.com/your-org/your-app.git');
+  const u = node(['-r', NO_NET, PR, 'unapprove', '7', '--dry-run'], { cwd: gdir });
+  assert(u.status === 1 && /WARN: GitHub has no unapprove/.test(u.out) && !/NETWORK CALLED/.test(u.out), u.out);
+});
+
 check('pr.js and build.js take --help', () => {
   for (const script of [PR, BUILD]) {
     const r = node([script, '--help']);

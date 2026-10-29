@@ -62,7 +62,8 @@ const DEFAULT_STEPS = {
   ios: DEVICE_STEPS,
   'unit-tests': ['identify-units', 'extend-suites', 'run-green', 'commit'],
   report: ['assemble'],
-  publish: ['comment', 'attachments', 'labels', 'confirm'],
+  // approve was added later: a run seeded without it gets it appended by `step`.
+  publish: ['comment', 'attachments', 'labels', 'approve', 'confirm'],
 };
 
 // ASCII only: CI logs and Windows terminals mangle box-drawing glyphs and emoji.

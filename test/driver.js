@@ -419,7 +419,7 @@ function makeHost(port) {
   return { dir, hook, sessionFile, spawnLog: path.join(dir, 'spawn.log') };
 }
 
-function runDriver(host, args) {
+function runDriver(host, args, extraEnv = {}) {
   const env = { ...process.env };
   for (const k of Object.keys(env)) {if (/^QC_/.test(k)) {delete env[k];}}
   Object.assign(env, {
@@ -428,7 +428,7 @@ function runDriver(host, args) {
     QC_TEST_PNG: PNG.toString('base64'),
     QC_CRED_STAGING_USERNAME: SECRET_USER,
     QC_CRED_STAGING_PASSWORD: SECRET_PASS,
-  });
+  }, extraEnv);
   const argv = ['-r', host.hook, DRIVER, ...args];
   return new Promise(resolve => {
     execFile(process.execPath, argv, { cwd: host.dir, env, encoding: 'utf8', timeout: 30000 }, (err, stdout, stderr) => {
@@ -474,6 +474,16 @@ async function endToEnd() {
       assert(typed && typed.body.includes(SECRET_USER), 'typed into the active element');
       noSecret(r.out, 'stdout/stderr');
       noSecret(spawned(host), 'a child process');
+    });
+
+    await check('input --credential app-username drops the "|<baseSite>" suffix', async () => {
+      state.bodies.length = 0;
+      const r = await runDriver(host, ['input', '--class', 'android.widget.EditText', '--index', '0', '--credential', 'app-username'],
+        { QC_CRED_STAGING_USERNAME: `${SECRET_USER}|extra-sa` });
+      assert(r.status === 0, `exit ${r.status}: ${r.out}`);
+      const typed = state.bodies.find(b => /\/element\/field-0\/value$/.test(b.url));
+      assert(typed && typed.body.includes(SECRET_USER) && !typed.body.includes('extra-sa'), 'typed the username without the suffix');
+      noSecret(r.out, 'stdout/stderr');
     });
 
     await check('input errors name the target, never the credential', async () => {

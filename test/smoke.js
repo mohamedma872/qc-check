@@ -376,7 +376,7 @@ try {
       }
       assert(fs.existsSync(portFile), 'mock jira did not start');
       const cfg = JSON.parse(original);
-      cfg.tracker = { ...cfg.tracker, kind: 'jira', rest: { enabled: true, baseUrlEnv: 'QC_T_URL', emailEnv: 'QC_T_EMAIL', tokenEnv: 'QC_T_TOKEN' } };
+      cfg.tracker = { ...cfg.tracker, kind: 'jira', publish: true, rest: { enabled: true, baseUrlEnv: 'QC_T_URL', emailEnv: 'QC_T_EMAIL', tokenEnv: 'QC_T_TOKEN' } };
       fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
       const runDir = run([path.join(host, 'qc', 'runs.js'), 'open', 'ABC-123'], { cwd: host }).trim().split('\n').pop();
       const env = { ...process.env, QC_RUN_DIR: runDir, QC_T_URL: `http://127.0.0.1:${fs.readFileSync(portFile, 'utf8')}`,
@@ -397,6 +397,12 @@ try {
       const lb = tr(['labels', 'ABC-123', '--add', 'QC-Agent-Pass', '--remove', 'BE-Blocking']); all.push(lb.out);
       assert(lb.status === 0, `labels failed: ${lb.out.slice(0, 120)}`);
       assert(/multipart\/form-data/.test(fs.readFileSync(logFile, 'utf8')), 'attachment was not sent as multipart');
+      fs.writeFileSync(cfgPath, JSON.stringify({ ...cfg, tracker: { ...cfg.tracker, publish: false } }, null, 2));
+      for (const w of [['comment', 'ABC-123', '--file', report], ['attach', 'ABC-123', report], ['labels', 'ABC-123', '--add', 'X']]) {
+        const off = tr(w); all.push(off.out);
+        assert(off.status === 0 && /SKIPPED/.test(off.out), `${w[0]} should be skipped while tracker.publish is false: ${off.out.slice(0, 120)}`);
+      }
+      fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
       const bad = runSoft([path.join(host, 'qc', 'tracker.js'), 'check'], { cwd: host, env: { ...env, QC_T_TOKEN: 'wrong-token' } });
       all.push(bad.out);
       assert(bad.status === 2, 'a refused token should exit 2');
