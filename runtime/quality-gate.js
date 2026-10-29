@@ -3,6 +3,12 @@
 // Fail-closed, deterministic validation of qc-check summary and evidence.
 const fs = require('fs');
 const path = require('path');
+// Phases the skill skips by design (no diff, backend disabled, no tablet/iOS lane,
+// sweep mode, no tracker). Any other phase must pass; a skip here still needs a reason.
+const OPTIONAL_PHASES = ['code-review','contract','tablet','ios','unit-tests','publish'];
+function readState(root) {
+  try { return JSON.parse(fs.readFileSync(path.join(root,'state.json'),'utf8')); } catch (_) { return null; }
+}
 function evaluate(summary, root) {
   const errors = [];
   if (!summary || typeof summary !== 'object') return { pass: false, errors: ['missing or invalid summary'] };
@@ -10,10 +16,17 @@ function evaluate(summary, root) {
   for (const key of ['ticket','environment','runId','startedAt']) {
     if (typeof summary[key] !== 'string' || !summary[key].trim()) errors.push('missing ' + key);
   }
+  const state = root && readState(root);
   if (!summary.phases || typeof summary.phases !== 'object' || !Object.keys(summary.phases).length) errors.push('missing phases');
   else for (const [phase, status] of Object.entries(summary.phases)) {
-    if (!['passed','pass','completed','done','skipped'].includes(String(status).toLowerCase())) errors.push('unfinished phase: ' + phase);
-    if (['skipped'].includes(String(status).toLowerCase())) errors.push('skipped phase: ' + phase);
+    const s = String(status).toLowerCase();
+    if (['passed','pass','completed','done'].includes(s)) continue;
+    if (s !== 'skipped') errors.push('unfinished phase: ' + phase);
+    else if (!OPTIONAL_PHASES.includes(phase)) errors.push('skipped required phase: ' + phase);
+    else {
+      const entry = state && state.phases && state.phases[phase];
+      if (!entry || typeof entry.note !== 'string' || !entry.note.trim()) errors.push('skipped phase without a reason: ' + phase);
+    }
   }
   if (!summary.findings || !Number.isInteger(summary.findings.red) || summary.findings.red !== 0) errors.push('red findings present or unknown');
   if (!summary.artifacts || !Number.isInteger(summary.artifacts.screenshots) || summary.artifacts.screenshots < 1) errors.push('missing screenshot evidence');
