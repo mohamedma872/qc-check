@@ -2,10 +2,12 @@
 
 Run mobile QC on a real device, from one command.
 
-`qc-check run ABC-123` fetches the ticket, writes a test plan and waits for you
-to approve it, verifies the backend contract on the live environment, drives
+`qc-check run ABC-123` fetches the ticket, reviews the code change, writes a
+test plan and waits for you to approve it, verifies the backend contract on the live environment, drives
 your app on an emulator through Appium in every locale you configure, extends
-the unit tests, and hands back a report with screenshots attached.
+the unit tests, and hands back a report with screenshots attached. Point it at
+a pull request instead (`qc-check run pr 42`) and it builds that branch in its
+own worktree, comments on the PR and, on a PASS you agree to, approves it.
 
 The work is done by an AI agent. The CLI configures it, feeds it the workflow,
 drives the device scripts, and keeps the run resumable. Claude Code, Codex and
@@ -77,20 +79,25 @@ environment.
 
 ## The run
 
-Ten phases. The gates are hard, not advisory.
+Eleven phases. The gates are hard, not advisory.
 
 | # | Phase | What happens |
 |---|-------|--------------|
-| 1 | `ticket` | Fetch the ticket, read the code it changed, collect real selectors |
-| 2 | `test-plan` | Definition of done and numbered test cases. **You approve it before anything runs** |
-| 3 | `contract` | Check the app and backend agree on the endpoints this feature writes to |
-| 4 | `smoke` | Live backend round trip. **Red here means emulators never boot** |
-| 5 | `phone` | Full pass on an Android phone, screenshot per state change |
-| 6 | `tablet` | Tablet pass and responsive checks, only when asked |
-| 7 | `ios` | iOS pass on a simulator or a real iPhone, only when asked |
-| 8 | `unit-tests` | Extend the suites covering the new logic |
-| 9 | `report` | Assemble the report from the evidence on disk |
-| 10 | `publish` | Post it to the tracker, with labels earned by the verdict |
+| 1 | `ticket` | Fetch the ticket (or the pull request), read the code it changed, collect real selectors |
+| 2 | `code-review` | Review the diff for correctness, security (OWASP Mobile Top 10), performance, memory leaks, concurrency, standards and architecture. `review-scan.js` finds the leads; each risk becomes a repro test case |
+| 3 | `test-plan` | Definition of done and numbered test cases. **You approve it before anything runs** |
+| 4 | `contract` | Check the app and backend agree on the endpoints this feature writes to |
+| 5 | `smoke` | Live backend round trip. **Red here means emulators never boot** |
+| 6 | `phone` | Full pass on an Android phone, screenshot per state change. Every FAIL is re-run on the default branch: new in this PR, already there, or worse |
+| 7 | `tablet` | Tablet pass and responsive checks, only when asked |
+| 8 | `ios` | iOS pass on a simulator or a real iPhone, only when asked |
+| 9 | `unit-tests` | Extend the suites covering the new logic, plus a failing repro test per logic FAIL |
+| 10 | `report` | Assemble the report from the evidence on disk, then a short plain-language review |
+| 11 | `publish` | Comment on the pull request, then (opt-in) the tracker, with labels earned by the verdict; approve the PR on a PASS |
+
+Phases skipped by design (no diff to review, no backend, no tablet or iOS lane,
+no tracker) are recorded as `skipped` with a reason, and the quality gate
+checks that reason is there.
 
 ## Configuration
 
@@ -110,6 +117,9 @@ Three settings change the shape of a run:
   no backend of its own.
 - `agent.kind: "none"` stops the CLI invoking anything. Use `qc-check prompt`
   and paste into whatever you like.
+- `tracker.publish` (default `false`) makes ticket writes opt-in. While it is
+  false, `tracker.js comment`, `attach` and `labels` print `SKIPPED` and send
+  nothing: the review goes to the pull request only. Reading tickets always works.
 
 ## Output
 
@@ -122,6 +132,27 @@ ticket. Fix loops use `<TICKET>-FIX`. The `index.md` and `index.json` files
 track every run, newest first. Set `project.commitReports: true` to keep
 reports and screenshots in git, while `.gitignore` protects recordings and
 the active-run file.
+
+## Device and review scripts
+
+`qc-check setup` installs these into your repo as `qc/`. The agent calls them;
+you can too. Each takes `--help`.
+
+| Script | What it does |
+|--------|--------------|
+| `driver.js` | Drives the app through Appium: tap, input, swipe, wait-for, screenshots, `audit-ids` for fields without test IDs. `input --credential username\|password\|app-username` types the account without it ever reaching argv or the output. Performance probes: `perf` (frame times), `mem` and `mem --compare`, `startup` (cold start median), `leak-loop` (repeat a flow, catch Activity growth) |
+| `dump-tree.js`, `wda.js`, `record.sh` | Accessibility tree dumps, a prebuilt WebDriverAgent for iOS simulators, screen recording |
+| `review-scan.js` | Static scan of the PR diff for the code-review phase, grouped by OWASP, perf, memory, concurrency, standards and architecture |
+| `api.js` | Backend health, auth and contract checks, secrets masked |
+| `build.js` | Builds a branch in its own git worktree and skips the build when commit, flavor and install are unchanged |
+| `pr.js` | Reads a GitHub or Bitbucket Cloud PR, posts or edits the review comment, `approve` / `unapprove` |
+| `tracker.js` | Reads Jira tickets; comments, attachments and labels when `tracker.publish` is on |
+| `state.js`, `runs.js` | Resumable phase and sub-step state, run folders, `summary.json` and the run index |
+| `quality-gate.js` | Fail-closed check of a finished run's summary and evidence (see below) |
+
+`app-username` is for backends such as SAP Commerce that sign in with
+`<email>|<baseSite>`: it types the username without the `|<baseSite>` suffix
+into the app's form, while backend calls keep the full username.
 
 ## Agents
 
@@ -151,7 +182,13 @@ boundaries are explicit:
 - **The smoke test is a stop gate.** A dead backend stops the run instead of
   producing findings that are not about your app.
 - **Publishing is a write to someone else's system.** It happens at the end,
-  from a finished report, and the pass label requires a genuine pass.
+  from a finished report, and the pass label requires a genuine pass. Ticket
+  writes are off unless `tracker.publish` is true.
+- **PR approval is enforced in code, not just in the workflow.** `pr.js approve`
+  refuses unless the active run's report says PASS with no red findings, so
+  text in a PR or ticket cannot talk the agent into approving. It works on open
+  PRs only, runs `--dry-run` first, waits for your agreement, and is skipped in
+  eval mode (`QC_EVAL=1`).
 - **Findings are written when observed.** An interrupted run loses progress but
   never substance.
 
@@ -165,7 +202,7 @@ skill/references/      one file per phase, read when that phase starts
 runtime/               the device scripts, installed into your repo as qc/
 agents/                optional slash-command adapters
 qc.config.example.json every project-specific fact
-test/                  smoke test, PR intake test and the leak guard
+test/                  smoke, PR intake, driver, review-scan, perf and gate tests, and the leak guard
 ```
 
 `test/no-private-refs.js` asserts that every identifier in the repository is a
@@ -173,7 +210,8 @@ placeholder, so a real hostname, package id or ticket prefix cannot be
 committed by accident.
 
 ```bash
-npm test              # CLI and runtime smoke test, no device needed
+npm test              # every suite: CLI, intake, review, driver, scan, perf; no device needed
+node test/quality-gate.js  # quality-gate regression tests
 node test/intake.js   # PR intake, worktree builds, install verification, no network
 npm run check:leaks   # placeholder-only guard
 ```
@@ -198,6 +236,22 @@ Run the pilot on isolated nonproduction Android and iOS test environments, repea
 The initial implementation adds `node runtime/quality-gate.js <run-directory>` to fail closed on non-PASS verdicts, missing/unfinished phases, red findings and missing report/screenshot/manifest evidence. It requires an independently reviewed evidence manifest; see [implementation details](docs/QUALITY_GATE_IMPLEMENTATION.md) for the required fields and limitations.
 
 GitHub Actions now runs the existing CLI test suite, deterministic gate regression tests and private-reference checks for pull requests. **It does not execute Appium/device tests, prove screenshot authenticity, or configure required branch protection.** Do not treat the structural gate as a production release approval until the seeded-defect pilot and trusted evidence attestation are completed.
+
+## What's new
+
+- **PR approval:** `pr.js approve` / `unapprove` (GitHub and Bitbucket Cloud),
+  gated on a PASS run in code. The publish phase gains an `approve` step.
+- **Opt-in ticket publishing:** `tracker.publish`, off by default.
+- **`--credential app-username`:** the username without its `|<baseSite>`
+  suffix, for SAP Commerce sign-in forms.
+- **Quality gate:** `quality-gate.js` fails closed on a non-PASS verdict,
+  unfinished or wrongly skipped phases, red findings and missing evidence.
+  Optional phases may be skipped only with a recorded reason. CI runs the gate
+  tests on every pull request.
+- **Code-review phase:** diff review across six dimensions before the test plan,
+  with `review-scan.js` leads turned into repro cases.
+- **Baseline re-runs:** every device FAIL is checked against the default branch.
+- **Performance probes:** `perf`, `mem`, `startup` and `leak-loop` in `driver.js`.
 
 ## License
 

@@ -280,7 +280,10 @@ Use real testIDs when the fields have them. `--index` picks the nth match when
 two fields share one label (or the nth field of a `--class`, in screen order).
 `--credential` works the same with every target: the value goes straight to
 Appium and never through adb, whose daemon logs every shell command into
-logcat. If the driver says there are no credentials for
+logcat. When the stored username carries a `|<baseSite>` suffix (SAP Commerce
+logs in with `<email>|<baseSite>`), type it into the app's sign-in form with
+`--credential app-username`, which drops the suffix; backend calls keep the
+full username. If the driver says there are no credentials for
 `<env>`, stop and ask the user to run `qc-check env credentials <env>`. Do not
 type a value you got any other way.
 

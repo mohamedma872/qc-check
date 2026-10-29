@@ -38,6 +38,9 @@ const DEFAULTS = {
     rest: { enabled: false, baseUrlEnv: 'JIRA_BASE_URL', emailEnv: 'JIRA_EMAIL', tokenEnv: 'JIRA_API_TOKEN', acceptanceField: '' },
     passLabel: 'QC-Agent-Pass',
     blockedLabel: 'BE-Blocking',
+    // Opt-in: write the review, evidence and labels to the ticket. Off by default,
+    // so publish goes to the pull request only.
+    publish: false,
   },
   repo: {
     defaultBranch: 'main',

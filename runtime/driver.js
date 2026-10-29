@@ -556,6 +556,11 @@ function credentialValue(field) {
 
   if (field === 'username' || field === 'password') {return creds[field];}
 
+  // The username as the app's sign-in form expects it: backends such as SAP
+  // Commerce log in with "<email>|<baseSite>", which an email field rejects.
+  // Drops the "|<baseSite>" suffix; backend calls keep the full username.
+  if (field === 'app-username') {return String(creds.username || '').split('|')[0];}
+
   // Any other field (a PIN, a second factor seed) can only come from the
   // environment's block in a hand-written credentials file.
   let block = null;
@@ -1903,7 +1908,9 @@ Commands:
                       --x <n> --y <n>             ... or tap there to focus, then type
                       --text "value"              Type a literal value
                       --credential <field>        Type a credential of the active environment
-                                                  (username | password; from QC_CRED_<ENV>_*
+                                                  (username | password | app-username = the
+                                                  username without a "|<baseSite>" suffix,
+                                                  for app sign-in forms; from QC_CRED_<ENV>_*
                                                   env vars or the credentials file). The
                                                   value never appears on a command line,
                                                   in the log or in an error message.

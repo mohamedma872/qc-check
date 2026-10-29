@@ -9,7 +9,7 @@ Sub-steps (record each with `node qc/state.js ABC-123 step <phase> <name> <statu
 | Phase | Sub-steps |
 |-------|-----------|
 | `report` | `assemble` |
-| `publish` | `comment` -> `attachments` (one step covers all uploads; note which files landed) -> `labels` -> `confirm` |
+| `publish` | `comment` -> `attachments` (one step covers all uploads; note which files landed) -> `labels` -> `approve` (PASS only) -> `confirm` |
 
 ## The QC report
 
@@ -223,6 +223,14 @@ report and its evidence on disk in `<run>/`, and tell the user the run folder,
 the `report.md` and `summary.json` paths, plus the one-paragraph verdict. That
 is a complete, successful run.
 
+**Ticket writes are opt-in: `config.tracker.publish` (default `false`).** While
+it is false, write nothing to the ticket: skip steps 1-3 below
+(`step publish comment skipped tracker.publish is false`, the same for
+`attachments` and `labels`), post `review.md` on the pull request only (step
+4), then approve per step 5. `tracker.js comment|attach|labels` refuse with
+`SKIPPED` as a backstop. Set it to `true` only when the user asks for the
+ticket to be updated.
+
 When `config.tracker.rest.enabled` is true (Jira over REST), every step below
 goes through `node qc/tracker.js` instead of a tool:
 `comment ABC-123 --file <run>/review.md`, `attach ABC-123 <run>/report.md <file>...`
@@ -273,10 +281,22 @@ calls tools (an MCP tool name, a CLI, or an HTTP call, depending on the host):
    to paste, and offer to open the PR URL if they share it. Posting on a pull
    request is an external write: ask first, as for the ticket.
 
-5. **Confirm** in your reply what landed where: the ticket comment and
+5. **Approve the pull request (verdict-gated).** Only when the overall verdict
+   is PASS, the run has a pull request, and the user approved publishing or
+   approving for this run (ask first otherwise: an approval is an external
+   write that reviewers rely on). Run `node qc/pr.js approve <n> --dry-run`
+   first and check it names the right PR and that it is OPEN, then
+   `node qc/pr.js approve <n>`. An already-approved PR reads as OK. Never
+   approve on FAIL or BLOCKED (`step publish approve skipped verdict <FAIL|BLOCKED>`),
+   and never in eval mode. With no pull request, mark the sub-step
+   `skipped no pull request`. `node qc/pr.js unapprove <n>` withdraws an
+   approval on Bitbucket; GitHub has no unapprove, dismiss the review instead.
+
+6. **Confirm** in your reply what landed where: the ticket comment and
    attachments (with the link, built from `config.tracker.site` and
    `config.tracker.projectKey` when they are set), the labels applied and
-   removed, and the `report.md` and `review.md` paths in the run folder.
+   removed, whether the pull request was approved, and the `report.md` and
+   `review.md` paths in the run folder.
 
 ## Optional: codify the verified flow for a future e2e suite
 

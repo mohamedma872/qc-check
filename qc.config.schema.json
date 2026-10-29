@@ -114,6 +114,11 @@
           "type": "string",
           "default": "BE-Blocking",
           "description": "Label applied when the blocker is outside the app."
+        },
+        "publish": {
+          "type": "boolean",
+          "default": false,
+          "description": "Opt-in: post the review comment, evidence and labels to the ticket. false (default) publishes to the pull request only."
         }
       }
     },

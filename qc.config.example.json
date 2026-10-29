@@ -21,7 +21,8 @@
       "uploadAttachment": ""
     },
     "passLabel": "QC-Agent-Pass",
-    "blockedLabel": "BE-Blocking"
+    "blockedLabel": "BE-Blocking",
+    "publish": false
   },
   "agent": {
     "kind": "claude",

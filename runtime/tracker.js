@@ -294,4 +294,9 @@ async function check() {
 const COMMANDS = { get: getIssue, comment, attach, labels, check };
 const cmd = COMMANDS[args[0]];
 if (!cmd) { fail(`unknown command "${args[0]}"\n\n${HELP}`); }
+// Ticket writes are opt-in (tracker.publish); reads always work.
+if (['comment', 'attach', 'labels'].includes(args[0]) && tracker.publish !== true) {
+  console.log(`SKIPPED: ${args[0]} on ${args[1] || 'the ticket'} - tracker.publish is false in qc.config.json, nothing was sent to Jira`);
+  process.exit(0);
+}
 cmd().catch(err => fail(`ERROR: ${redact(err && err.message ? err.message : String(err))}`));

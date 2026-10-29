@@ -14,6 +14,8 @@
 //   node qc/pr.js id <n> [--json]               the ticket id to use for this PR
 //   node qc/pr.js comment <n> --file <path> [--dry-run]
 //   node qc/pr.js comment <n> --update <commentId> --file <path> [--dry-run]
+//   node qc/pr.js approve <n> [--dry-run]       approve the PR as the authenticated user
+//   node qc/pr.js unapprove <n> [--dry-run]     withdraw that approval (Bitbucket only)
 //
 // Exit codes: 0 ok | 1 usage/config | 2 auth failed | 3 not found | 4 other HTTP error
 'use strict';
@@ -38,6 +40,12 @@ const HELP = [
   '  pr.js comment <n> --update <commentId> --file <path> [--dry-run]',
   '                                         post (or edit) a review comment; --dry-run prints',
   '                                         what would be sent and where, and writes nothing',
+  '  pr.js approve <n> [--dry-run]          approve the PR as the authenticated user (OPEN PRs only;',
+  '                                         already approved reads as OK). --dry-run reads the PR,',
+  '                                         prints the call it would make, and writes nothing',
+  '  pr.js unapprove <n> [--dry-run]        withdraw that approval. Bitbucket only: GitHub has no',
+  '                                         unapprove, dismiss the review instead.',
+  '                                         Both are skipped (exit 0) when QC_EVAL=1.',
   '',
   'Options:',
   '  --remote <name>   the git remote to read (default repo.remote, else origin)',
@@ -179,7 +187,11 @@ function bitbucketRequest(auth, method, apiPath, body) {
 }
 
 async function bitbucketCall(auth, method, apiPath, body) {
-  const res = await bitbucketRequest(auth, method, apiPath, body);
+  return bitbucketCheck(auth, method, apiPath, await bitbucketRequest(auth, method, apiPath, body));
+}
+
+// Exits on an auth, not-found or other HTTP error; otherwise the parsed body.
+function bitbucketCheck(auth, method, apiPath, res) {
   if (res.status === 401 || res.status === 403) {
     fail(`AUTHFAIL (HTTP ${res.status}) on ${method} ${apiPath}: check ${auth.names.email} / ${auth.names.token}`, 2);
   }
@@ -306,7 +318,92 @@ async function cmdComment(args) {
   console.log(`OK: comment ${res && res.id} ${updateId ? 'updated' : 'posted'} on ${plan.where}${link ? `: ${link}` : ''}`);
 }
 
-const COMMANDS = { get: cmdGet, id: cmdId, comment: cmdComment };
+// Approve (or withdraw an approval) as the authenticated user. An external
+// write: the workflow runs --dry-run first and approves only a PASS run.
+async function cmdApprove(args, remove) {
+  const verb = remove ? 'unapprove' : 'approve';
+  const n = prNumber(args);
+  const dryRun = args.includes('--dry-run');
+  if (process.env.QC_EVAL === '1') {
+    console.log(`OK: ${verb} PR #${n} skipped: eval mode (QC_EVAL=1), nothing was sent`);
+    return;
+  }
+  const ctx = context(args);
+  const repoArg = ctx.kind === 'github' ? ghRepoArg(ctx.remote) : ctx.remote.slug;
+  const where = `${repoArg} PR #${n}`;
+  if (remove && ctx.kind === 'github') {
+    fail(
+      `WARN: GitHub has no unapprove for ${where}. Dismiss the approving review instead ` +
+        `(gh api --method PUT repos/${ctx.remote.slug}/pulls/${n}/reviews/<reviewId>/dismissals -f message=...), ` +
+        'or leave a new review requesting changes.',
+    );
+  }
+
+  // Approving needs the active run's report to say PASS with no red findings,
+  // checked here and not only in the skill: PR or ticket text cannot talk an
+  // agent into approving a run that did not pass. Withdrawing is always allowed.
+  if (!remove) {
+    // eslint-disable-next-line global-require
+    const runs = require('./runs.js');
+    // Without a qc.config.json there is no run (and loadConfig would exit).
+    const run = ctx.cfg.configPath ? runs.currentRun() : null;
+    if (!run || !run.dir) {fail(`ERROR: refusing to approve ${where}: no active QC run (node qc/runs.js current)`);}
+    const summary = runs.writeSummary(run);
+    if (summary.verdict !== 'PASS' || summary.findings.red !== 0) {
+      fail(
+        `ERROR: refusing to approve ${where}: run ${summary.ticket}/${summary.runId} is ` +
+          `${summary.verdict || 'without a verdict'} with ${summary.findings.red} red finding(s); only a PASS run is approved`,
+      );
+    }
+  }
+
+  // Read first: only an open PR can be approved, and the dry run should show that refusal too.
+  const pr = await fetchPr(ctx, n);
+  const state = String(pr.state || '').toUpperCase();
+  if (state !== 'OPEN') {fail(`ERROR: ${where} is ${state || 'in an unknown state'}, not OPEN: refusing to ${verb}`);}
+
+  const apiPath = bitbucketPath(ctx.remote, `/pullrequests/${n}/approve`);
+  const method = remove ? 'DELETE' : 'POST';
+  const command = ['gh', 'pr', 'review', String(n), '-R', repoArg, '--approve'];
+
+  if (dryRun) {
+    console.log(`DRY RUN: would ${verb} ${ctx.kind} ${where} (${state}): ${pr.title}`);
+    if (ctx.kind === 'github') {console.log(`  command  ${command.join(' ')}`);}
+    else {console.log(`  request  ${method} ${host.BITBUCKET_API.hostname}${apiPath}`);}
+    console.log('OK: nothing was sent (--dry-run)');
+    return;
+  }
+
+  if (ctx.kind === 'github') {
+    gh(command.slice(1));
+    console.log(`OK: approved ${where}${pr.url ? `: ${pr.url}` : ''}`);
+    return;
+  }
+
+  const auth = bitbucketAuth(ctx.cfg);
+  const res = await bitbucketRequest(auth, method, apiPath);
+  // Bitbucket answers 409 to a second approval, and 404 to withdrawing one that
+  // is not there (the PR itself was just read, so 404 is the approval).
+  if (!remove && res.status === 409) {
+    console.log(`OK: ${where} was already approved by this user; nothing changed${pr.url ? `: ${pr.url}` : ''}`);
+    return;
+  }
+  if (remove && res.status === 404) {
+    console.log(`OK: ${where} had no approval from this user to withdraw; nothing changed`);
+    return;
+  }
+  const j = bitbucketCheck(auth, method, apiPath, res);
+  const who = j && j.user && j.user.display_name ? ` as ${j.user.display_name}` : '';
+  console.log(`OK: ${remove ? 'approval withdrawn on' : 'approved'} ${where}${who}${pr.url ? `: ${pr.url}` : ''}`);
+}
+
+const COMMANDS = {
+  get: cmdGet,
+  id: cmdId,
+  comment: cmdComment,
+  approve: args => cmdApprove(args, false),
+  unapprove: args => cmdApprove(args, true),
+};
 
 function main(args) {
   if (!args.length || args.includes('--help') || args.includes('-h')) {
