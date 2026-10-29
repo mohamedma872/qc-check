@@ -56,26 +56,134 @@ device and reports what it saw, which catches a different class of problem:
 - **It reports what it observed.** A blocked run says who owns the blocker. A
   pass that was not witnessed on a device is never reported as a pass.
 
+## Features
+
+**Four ways to run**
+
+- **A ticket:** `qc-check run ABC-123`, or no argument to take the ticket id
+  from the branch name (`tracker.ticketPattern`).
+- **A pull request:** `qc-check run pr 42` on GitHub or Bitbucket Cloud. The
+  ticket key comes from the PR title or branch, else the PR itself is the
+  ticket. Its branch is built in its own git worktree, so your checkout is never
+  switched or stashed.
+- **A full-app sweep:** `qc-check run all` walks every screen in every locale
+  against a screen contract: it renders, the key elements are there, no error
+  state, data matches the API, nothing is clipped at the bottom.
+- **A fix loop:** `qc-check run fix ABC-123` triages a run's findings (app fix,
+  backend, product decision, tooling), then for each app fix: root cause, a
+  `qc-fix/*` branch, a minimal fix, re-verification on the device, a PR. It runs
+  through the queue on its own, asks product questions once, and hands a fix to
+  a human after two failed attempts.
+
+**Review before testing**
+
+- **Code review phase:** the diff is reviewed for correctness, security (OWASP
+  Mobile Top 10), performance, memory leaks, concurrency, standards and
+  architecture. `review-scan.js` finds the mechanical leads in added lines only,
+  so old debt is not blamed on the change. Each verified risk becomes a
+  `Repro:` or `Probe:` test case.
+- **Test plan you approve:** a Definition of Done from the acceptance criteria
+  and numbered test cases with real selectors, written to `plan.md`. Nothing
+  runs on a device until you approve it, and the plan then becomes the live
+  progress board.
+
+**Backend checks**
+
+- **Contract:** the app's write calls are checked against the backend ticket and
+  the live gateway.
+- **Smoke gate:** health, login and an authenticated read on the environment.
+  Red means the emulators never boot.
+
+**On the device**
+
+- **Android phone** (required), **tablet** and **iOS** (simulator or a real
+  iPhone) when asked, each as its own pass with a recording and a screenshot
+  per state change. It handles iOS system dialogs and Xcode 27 Device Hub
+  simulators, and ships a prebuilt WebDriverAgent.
+- **Right build, proved:** the flavor follows the environment, and the
+  environment banner (`app.envBanner`) is asserted on the first screen.
+  `build.js` skips a build when commit, flavor and install are unchanged, and
+  verifies the install.
+- **Every language:** one round per entry in `project.locales`, with mirrored
+  layout checks for right-to-left locales (`project.rtlLocales`) and
+  untranslated strings flagged.
+- **Resilience:** offline and API-down states are expected, not crashes, and a
+  failing request is replayed from the host to tell a backend fault from an
+  app bug.
+- **Missing test IDs:** `driver.js audit-ids` lists fields with no testID and
+  prints the command that reaches them anyway; each one is a finding.
+- **Performance probes** (Android): frame jank (`perf`), memory snapshots and
+  growth (`mem`, `mem --compare`), cold-start median (`startup`) and leak loops
+  (`leak-loop`), with limits in `perf.*`.
+- **Baseline:** every device FAIL is re-run on a build of the default branch,
+  so the report says whether it is new in this PR, already there, or worse.
+- **Shared machines:** each repo keeps its own Appium session and helper ports.
+  A device another repo is driving is refused, not taken over.
+
+**Tests, report and publish**
+
+- **Unit tests:** the suites covering the new logic are extended, and each logic
+  FAIL gets a failing repro test on a `qc-repro/*` branch, which the fix loop
+  turns green.
+- **Two documents per run:** `report.md`, the full evidence record, and
+  `review.md`, a short plain-language comment for the developer and the
+  reviewer, built only from what the report already says.
+- **Run cost:** usage is snapshotted per phase into `cost.json` and `cost.md`,
+  against a soft cap (`budget.runCap`, or `QC_BUDGET`).
+- **Publish:** the review is posted on the pull request (`pr.js comment`, with
+  `--update` to edit the earlier comment), then the PR is approved on a PASS you
+  agree to. Ticket comments, attachments and the pass or blocked label are
+  opt-in (`tracker.publish`). Without a tracker, the run tells you where the
+  report is.
+- **E2E export (optional):** when a flow passes and you ask, the exercised
+  steps can be exported as a flow file for your e2e runner, using the same
+  testIDs.
+
+**Runs you can trust**
+
+- **Resumable:** phases, sub-steps (`[k/N]`), notes and findings are on disk.
+  A re-run continues the same run folder at the step it stopped on, and an
+  approved plan stays approved.
+- **Visible progress:** one task per phase, a live `<phase> [k/N] <sub-step>`
+  label and a one-line status at every transition.
+- **One run, one environment:** backend URL, build flavor, test account and
+  evidence folder all follow `--env`. Protected environments such as prod need
+  `--allow-protected`.
+- **Quality gate:** `quality-gate.js` fails closed on a finished run (see below).
+- **Eval mode** (`QC_EVAL=1`, `--headless`): the plan is auto-approved, nothing
+  is committed or published, and the budget is a hard stop, so an eval harness
+  can score runs headlessly.
+
+**Setup**
+
+- `qc-check setup` detects Flutter or React Native, package ids, flavors,
+  build, test and lint commands, source layout, locales, emulators and the
+  agent CLI on PATH, then asks only about what it cannot detect.
+- `qc-check env` manages environments and their test accounts (stored mode
+  0600 and gitignored, or `QC_CRED_<ENV>_*` variables in CI).
+- `qc-check doctor` checks every prerequisite and exits non-zero when one is
+  missing, so it can gate a script.
+
 ## Commands
 
 | Command | What it does |
 |---------|--------------|
-| `qc-check setup` | Detect the project and configure it. Run this first |
+| `qc-check setup` | Detect the project and write `qc.config.json`. `--yes` takes every detected value, `--force` starts fresh |
 | `qc-check doctor` | Check every prerequisite and name the fix for what is missing |
-| `qc-check run <ticket>` | QC one ticket end to end |
-| `qc-check run pr <n>` | QC a pull request (GitHub or Bitbucket Cloud): its branch is built in its own worktree and tested |
+| `qc-check run <ticket>` | QC one ticket end to end (no argument: the ticket from the branch name) |
+| `qc-check run pr <n>` | QC a pull request (GitHub or Bitbucket Cloud) and the branch it merges |
 | `qc-check run all` | Sweep every screen in every locale |
-| `qc-check run fix <id>` | Loop over a previous run's findings: fix, re-verify, push |
-| `qc-check status [ticket]` | Phases, sub-steps, findings, and where a run resumes |
-| `qc-check report <ticket>` | The finished report and the evidence beside it |
-| `qc-check env` | List environments and manage credentials |
-| `qc-check prompt <ticket>` | Print the prompt instead of running it, for any agent |
-| `qc-check install --agent` | Optional: also expose it as a slash command in your agent |
+| `qc-check run fix <id>` | Loop over a previous run's findings: fix, re-verify, open PRs |
+| `qc-check status [ticket]` | Every run, or one run's phases, sub-steps, findings and where it resumes (`--run`, `--json`) |
+| `qc-check report <ticket>` | The report and evidence (`--path`, `--folder`, `--json`, `--open`) |
+| `qc-check env` | `list`, `add`, `use`, `credentials [--remove]`, `remove` environments and their accounts |
+| `qc-check prompt <target>` | Print the self-contained prompt instead of running it, for any agent (`--out <file>`) |
+| `qc-check install --agent <kind>` | Optional: also expose it as a skill in Claude Code, Codex or a generic agent |
 
-`run` takes `--dry-run` to show exactly what would be executed, `--headless` to
-run without a human, and `--agent <kind>` to override the configured backend
-for one run. `run`, `status` and `report` accept `--env <name>` to pick an
-environment.
+`run` takes `--env <name>` for the environment, `--allow-protected` for prod,
+`--headless` to run without a human, `--agent <kind>` to override the backend
+for one run, and `--dry-run` to show exactly what would run. Ctrl-C loses
+nothing: running the same target again resumes.
 
 ## The run
 
@@ -109,7 +217,7 @@ locales, source layout, build commands and which agent to use.
 Full key reference: **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)**. A JSON
 Schema ships with it, so a schema-aware editor completes the keys.
 
-Three settings change the shape of a run:
+These settings change the shape of a run:
 
 - `tracker.kind: "none"` drops the ticket fetch and the publish phase. The run
   takes its acceptance criteria from your prompt and leaves the report on disk.
@@ -126,8 +234,10 @@ Three settings change the shape of a run:
 Evidence is organized under `project.reportsDir` (default `qc-reports`) by
 ticket and environment. Each run produces a folder with a `summary.json`
 (machine-readable result), `report.md` (the full evidence record), `review.md` (a short
-plain-language comment for the ticket and pull request), screenshots, and
-optionally recordings and API traces. Full-app sweeps use `FULL-SWEEP` as the
+plain-language comment for the ticket and pull request), `plan.md` (the
+approved test plan and live progress board), `state.json`, `cost.json` and
+`cost.md`, screenshots (baseline re-runs as `NNN-base-<case>.png`), and
+optionally recordings, accessibility tree dumps and redacted API traces. Full-app sweeps use `FULL-SWEEP` as the
 ticket. Fix loops use `<TICKET>-FIX`. The `index.md` and `index.json` files
 track every run, newest first. Set `project.commitReports: true` to keep
 reports and screenshots in git, while `.gitignore` protects recordings and
@@ -162,6 +272,11 @@ into the app's form, while backend calls keep the full username.
 | `codex` | Invokes the `codex` binary |
 | `custom` | Runs `agent.command`, with `{prompt}` substituted or the prompt on stdin |
 | `none` | Prints the prompt for you to paste |
+
+`qc-check install --agent claude` adds the workflow as a Claude Code skill in
+`.claude/skills/qc-check/`, `codex` in `~/.codex/skills/qc-check/`, and
+`generic` in `./qc-check-workflow/`, so a run can also start from inside an
+agent session.
 
 The workflow is one file, `skill/SKILL.md`, shared by every backend and by the
 CLI. Nothing about the procedure is per-agent, so it cannot drift. Adding
