@@ -339,6 +339,24 @@ async function cmdApprove(args, remove) {
     );
   }
 
+  // Approving needs the active run's report to say PASS with no red findings,
+  // checked here and not only in the skill: PR or ticket text cannot talk an
+  // agent into approving a run that did not pass. Withdrawing is always allowed.
+  if (!remove) {
+    // eslint-disable-next-line global-require
+    const runs = require('./runs.js');
+    // Without a qc.config.json there is no run (and loadConfig would exit).
+    const run = ctx.cfg.configPath ? runs.currentRun() : null;
+    if (!run || !run.dir) {fail(`ERROR: refusing to approve ${where}: no active QC run (node qc/runs.js current)`);}
+    const summary = runs.writeSummary(run);
+    if (summary.verdict !== 'PASS' || summary.findings.red !== 0) {
+      fail(
+        `ERROR: refusing to approve ${where}: run ${summary.ticket}/${summary.runId} is ` +
+          `${summary.verdict || 'without a verdict'} with ${summary.findings.red} red finding(s); only a PASS run is approved`,
+      );
+    }
+  }
+
   // Read first: only an open PR can be approved, and the dry run should show that refusal too.
   const pr = await fetchPr(ctx, n);
   const state = String(pr.state || '').toUpperCase();
